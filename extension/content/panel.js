@@ -389,6 +389,10 @@
   // Renders "#0003 ✎"; click → inline input. If the number is taken, offers to swap.
   function numberEditor(host, item, onChange) {
     const draw = () => {
+      if (item.status === 'sold') {
+        host.innerHTML = `<span class="sku big sold" title="${item.formerSku ? `Ancien numéro ${esc(item.formerSku)} — sachet libre` : 'Vendu : plus de numéro'}">${esc(item.sku)}</span>`;
+        return;
+      }
       host.innerHTML = `<button class="sku-btn" title="Changer le numéro"><span class="sku big">${esc(item.sku)}</span>${icon('wand', 12)}</button>`;
       host.querySelector('.sku-btn').onclick = edit;
     };

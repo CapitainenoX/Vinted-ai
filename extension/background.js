@@ -112,7 +112,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   clearTimeout(backupTimer);
   backupTimer = setTimeout(() => store.backupToSync().catch((e) => console.warn('backup', e)), 3000);
 });
-store.restoreFromSyncIfEmpty().catch(() => {});
+store.restoreFromSyncIfEmpty().then(() => store.migrateSoldSkus()).catch(() => {});
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') chrome.tabs.create({ url: chrome.runtime.getURL('dashboard/dashboard.html#settings') });

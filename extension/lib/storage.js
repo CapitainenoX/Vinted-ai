@@ -84,6 +84,8 @@ export async function saveSettings(patch) {
 export const STATUSES = { draft: 'Brouillon', listed: 'En vente', sold: 'Vendu', archived: 'Archivé' };
 
 export const formatSku = (n) => '#' + String(n).padStart(4, '0');
+// A sold item gives its number back (its bag is free) and shows #VENDU; the old number stays in history (formerSku).
+export const SOLD_SKU = '#VENDU';
 export const skuNumber = (sku) => parseInt(String(sku ?? '').replace(/\D/g, ''), 10) || null;
 const isActive = (i) => i.status === 'draft' || i.status === 'listed';
 
@@ -105,6 +107,23 @@ export function nextFreeNumber(items, reuseSold = true) {
 
 export async function listItems() {
   return get(K.library, []);
+}
+
+// One-time fix for items sold before #VENDU existed: free their numbers.
+export async function migrateSoldSkus() {
+  const items = await listItems();
+  let changed = 0;
+  for (const i of items) {
+    if (i.status !== 'sold' || i.sku === SOLD_SKU) continue;
+    i.formerSku = i.sku;
+    i.sku = SOLD_SKU;
+    i.history = [...(i.history || []), { at: Date.now(), event: 'number_freed', from: i.formerSku }];
+    changed++;
+  }
+  if (changed) await set(K.library, items);
+  const archive = await listSalesArchive();
+  if (archive.some((i) => i.sku !== SOLD_SKU)) await set(K.salesArchive, archive.map((i) => (i.sku === SOLD_SKU ? i : { ...i, formerSku: i.formerSku || i.sku, sku: SOLD_SKU })));
+  return changed;
 }
 
 // Several items can share a number (a sold one and the active one that reused it):
@@ -132,6 +151,7 @@ const ITEM_FIELDS = [
   'price', 'cost', 'photos', 'status', 'vintedId', 'vintedUrl', 'notes', 'soldPrice', 'soldAt',
   'buyer', 'listedAt', 'location',
 ];
+// Note: sku / formerSku are managed here (createItem, updateItem, setItemNumber), never taken from a patch.
 
 function clean(patch) {
   const out = {};
@@ -157,7 +177,7 @@ export async function createItem(data) {
   const now = Date.now();
   const item = {
     id: crypto.randomUUID(),
-    sku: formatSku(nextFreeNumber(items, settings.skuReuseSold)),
+    sku: data.status === 'sold' ? SOLD_SKU : formatSku(nextFreeNumber(items, settings.skuReuseSold)),
     status: 'draft',
     tags: [],
     photos: [],
@@ -183,6 +203,18 @@ export async function updateItem(ref, patch) {
     next.history = [...(prev.history || []), { at: Date.now(), event: next.status }];
     if (next.status === 'sold' && !next.soldAt) next.soldAt = Date.now();
     if (next.status === 'listed' && !next.listedAt) next.listedAt = Date.now();
+    if (next.status === 'sold' && prev.sku !== SOLD_SKU) {
+      next.formerSku = prev.sku;
+      next.sku = SOLD_SKU;
+      next.history.push({ at: Date.now(), event: 'number_freed', from: prev.sku });
+    } else if (prev.status === 'sold' && next.status !== 'sold') {
+      // Back on sale / draft: take its old number again if still free, else the smallest free one.
+      const others = items.filter((i) => i.id !== prev.id);
+      const settings = await getSettings();
+      const taken = takenNumbers(others, settings.skuReuseSold);
+      const old = skuNumber(prev.formerSku);
+      next.sku = formatSku(old && !taken.has(old) ? old : nextFreeNumber(others, settings.skuReuseSold));
+    }
   }
   items[idx] = next;
   await set(K.library, items);
@@ -212,7 +244,7 @@ export async function statsItems() {
 // Restores the library if local storage is ever emptied (profile reset, reinstall from the same folder).
 const SYNC_CHUNK = 7000;
 const slimForSync = (i) => ({
-  id: i.id, sku: i.sku, title: (i.title || '').slice(0, 70), brand: i.brand, size: i.size, status: i.status,
+  id: i.id, sku: i.sku, formerSku: i.formerSku, title: (i.title || '').slice(0, 70), brand: i.brand, size: i.size, status: i.status,
   price: i.price, cost: i.cost, soldPrice: i.soldPrice, soldAt: i.soldAt, listedAt: i.listedAt, createdAt: i.createdAt,
   vintedId: i.vintedId, notes: (i.notes || '').slice(0, 120), location: i.location, deletedAt: i.deletedAt,
 });
@@ -256,6 +288,7 @@ export async function setItemNumber(ref, number, { swap = false } = {}) {
   const idx = findIndexByRef(items, ref);
   if (idx < 0) throw new Error(`Article introuvable : ${ref}`);
   const item = items[idx];
+  if (item.status === 'sold') throw new Error("Un article vendu n'a plus de numéro (#VENDU) : son sachet est libre.");
   const holder = items.find((i) => i.id !== item.id && skuNumber(i.sku) === n && (!settings.skuReuseSold || isActive(i)));
   if (holder && !swap) {
     const err = new Error(`${formatSku(n)} est déjà pris par « ${holder.title || 'sans titre'} ».`);
@@ -316,6 +349,7 @@ export async function importAll(data) {
     for (const it of data.salesArchive) if (it?.id) arch.set(it.id, it);
     await set(K.salesArchive, [...arch.values()]);
   }
+  await migrateSoldSkus();
   return merged.length;
 }
 

@@ -428,6 +428,10 @@ function drawNumber(d, item) {
   const host = $('.sku-host', d);
   const msg = $('.sku-msg', d);
   const show = () => {
+    if (item.status === 'sold') {
+      host.innerHTML = `<span class="sku sold">${esc(item.sku)}</span>${item.formerSku ? `<span class="muted small"> ancien n° ${esc(item.formerSku)} — sachet libre</span>` : ''}`;
+      return;
+    }
     host.innerHTML = `<button class="sku-btn" title="Changer le numéro"><span class="sku">${esc(item.sku)}</span>${icon('wand', 14)}</button>`;
     $('.sku-btn', host).onclick = edit;
   };

@@ -89,6 +89,7 @@
 .chip.accent { background: var(--accent-soft); color: var(--accent); }
 .chip.success { color: var(--success); } .chip.warn { color: var(--warn); } .chip.danger { color: var(--danger); }
 .sku { font: 700 12px/1 var(--mono); color: var(--accent); letter-spacing: .02em; }
+.sku.sold { color: var(--chart-2); }
 .num { font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
 .spinner { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: vai-spin .7s linear infinite; }

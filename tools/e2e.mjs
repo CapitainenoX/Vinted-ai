@@ -323,6 +323,30 @@ const kept = await dash.evaluate(async () => {
   return (await st.statsItems()).some((i) => i.vintedId === '901' && i.status === 'sold');
 });
 check(kept, 'deleting a sold item keeps the sale in the stats (sales archive)');
+// sold → number freed, shows #VENDU; back on sale → gets a number again; old sold items migrated
+const vendu = await dash.evaluate(async () => {
+  const st = await import('../lib/storage.js');
+  const a = await st.createItem({ title: 'Test vente', status: 'listed' });
+  const num = a.sku;
+  const sold = await st.updateItem(a.id, { status: 'sold', soldPrice: 10 });
+  const b = await st.createItem({ title: 'Nouveau' }); // takes the freed number
+  let renumberErr = '';
+  try { await st.setItemNumber(a.id, 50); } catch (e) { renumberErr = e.message; }
+  const back = await st.updateItem(a.id, { status: 'listed' });
+  // an item sold before this feature (still holding its number)
+  const lib = await st.listItems();
+  lib.push({ id: 'old-sold', sku: '#0077', status: 'sold', title: 'Ancienne vente', soldAt: Date.now(), history: [] });
+  await chrome.storage.local.set({ library: lib });
+  await st.migrateSoldSkus();
+  const old = (await st.listItems()).find((i) => i.id === 'old-sold');
+  for (const id of [a.id, b.id, 'old-sold']) await st.deleteItem(id);
+  return { num, soldSku: sold.sku, former: sold.formerSku, reused: b.sku === num, renumberErr, backSku: back.sku, old: [old.sku, old.formerSku] };
+});
+check(vendu.soldSku === '#VENDU' && vendu.former === vendu.num, `sold item shows #VENDU, old number kept in history (${vendu.num})`);
+check(vendu.reused, 'freed number goes to the next new item');
+check(vendu.renumberErr.includes('vendu'), 'a sold item cannot be renumbered');
+check(/^#\d{4}$/.test(vendu.backSku) && vendu.backSku !== vendu.num, `back on sale → a free number again (${vendu.backSku}, its old one was taken)`);
+check(vendu.old[0] === '#VENDU' && vendu.old[1] === '#0077', 'items sold before the update are migrated to #VENDU');
 
 check(errors.length === 0, `no page errors ${errors.length ? JSON.stringify(errors) : ''}`);
 await ctx.close();
