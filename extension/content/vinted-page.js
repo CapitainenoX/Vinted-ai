@@ -293,6 +293,39 @@
     return true;
   };
 
+  // ---------- member profile: is it mine + the listings shown on it ----------
+  VAI.currentMemberId = () => (location.pathname.match(/\/member\/(\d+)/) || [])[1] || null;
+  // The logged-in account's own profile link lives in the header (avatar / menu).
+  VAI.headerMemberId = () => {
+    for (const a of document.querySelectorAll('header a[href*="/member/"], nav a[href*="/member/"], [data-testid*="header"] a[href*="/member/"]')) {
+      const m = a.getAttribute('href').match(/\/member\/(\d+)/);
+      if (m) return m[1];
+    }
+    return null;
+  };
+  VAI.readProfileItems = () => {
+    const main = document.querySelector('main') || document.body;
+    const byId = new Map();
+    for (const a of main.querySelectorAll('a[href*="/items/"]')) {
+      if (a.closest('#' + PANEL_HOST + ', header, nav')) continue;
+      const id = a.getAttribute('href').match(/\/items\/(\d+)/)?.[1];
+      if (!id || byId.has(id)) continue;
+      const card = a.closest('[data-testid*="item"], [class*="ItemBox"], [class*="item-box"], [class*="feed-grid__item"], li, article') || a.parentElement;
+      const text = (card?.innerText || '').split('\n').map((t) => t.trim()).filter(Boolean);
+      const img = card?.querySelector('img');
+      const priceLine = text.find((t) => /\d[\d\s.,]*\s?(€|eur|\$|£|zł|kč)/i.test(t)) || '';
+      byId.set(id, {
+        id,
+        url: `${location.origin}/items/${id}`,
+        title: (a.getAttribute('title') || img?.alt || text.find((t) => t !== priceLine && t.length > 2) || `Article ${id}`).split(',')[0].slice(0, 100),
+        price: VAI.parsePrice(priceLine),
+        photo: img?.currentSrc || img?.src || null,
+        sold: /\b(vendu|sold|verkauft|vendido|venduto)\b/i.test(text.join(' ')),
+      });
+    }
+    return [...byId.values()];
+  };
+
   // ---------- is this item page MY listing? ----------
   // Vinted shows different controls to the owner (edit / delete / bump / mark as reserved)
   // than to a buyer (buy / make an offer / message). We score both, then fall back on the

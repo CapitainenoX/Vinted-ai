@@ -102,7 +102,7 @@
               : ['Bonne affaire à revendre ?', 'Que fait-il mieux que moi ?', 'Prix du marché pour cet article']
             : VAI.pageType() === 'inbox'
               ? ['Propose 3 réponses à ce client', 'Ce client est-il sérieux ?', 'Quelle offre accepter ?']
-              : ['Mes stats de ventes', 'Quelles marques se vendent le mieux ?', 'Mes articles en vente depuis longtemps'],
+              : ['Trouve-moi une bonne affaire Nike à revendre', 'Mes stats de ventes', 'Mes articles en vente depuis longtemps'],
     });
     $('[data-view=chat]').addEventListener('library-changed', () => VAI.refreshIndex());
   }
@@ -183,6 +183,7 @@
     const type = VAI.pageType();
     if (type === 'item') return renderItemPage(view);
     if (type === 'inbox') return renderInbox(view);
+    if (type === 'profile') return renderProfile(view);
     if (type !== 'form') {
       view.innerHTML = `<div class="pad"><div class="card">
         <p><strong>Ouvre "Vendre"</strong> pour générer une annonce depuis tes photos, ou une fiche article pour l'auditer.</p>
@@ -650,6 +651,79 @@
     await messageStudio(view.querySelector('.studio-host'), { mode: 'reply', title: '3 messages pour ce client' });
   }
 
+  // ---------- my profile: listings on sale → see / mark sold / new ----------
+  async function renderProfile(view) {
+    const settings = await send('settings:get').catch(() => ({}));
+    const memberId = VAI.currentMemberId();
+    const mine = !!memberId && (memberId === settings.myMemberId || memberId === VAI.headerMemberId());
+    if (mine && settings.myMemberId !== memberId) send('settings:save', { patch: { myMemberId: memberId } }).catch(() => {});
+    if (!mine) {
+      view.innerHTML = `<div class="pad"><div class="card"><strong>Profil d'un autre membre</strong>
+        <p class="small muted">Sur ton propre profil, je liste tes articles en vente avec Voir / Vendu / Nouvel article.</p>
+        <div class="actions"><button class="btn sm" data-act="its-me">C'est mon profil</button></div></div></div>`;
+      view.querySelector('[data-act=its-me]').onclick = async () => {
+        await send('settings:save', { patch: { myMemberId: memberId } });
+        renderProfile(view);
+      };
+      return;
+    }
+    const cards = VAI.readProfileItems();
+    const index = await send('library:index').catch(() => ({}));
+    const onSale = cards.filter((c) => !c.sold && index[c.id]?.status !== 'sold');
+    view.innerHTML = `<div class="pad stack">
+      <div class="card row-between"><div><strong>Mes articles en vente</strong><div class="small muted">${onSale.length} sur cette page${cards.length > onSale.length ? ` · ${cards.length - onSale.length} vendu(s)` : ''}</div></div>
+        <a class="btn primary sm" href="${esc(location.origin)}/items/new">${icon('plus', 12)} Nouvel article</a></div>
+      ${onSale.length ? '' : '<div class="card"><p class="small muted">Aucun article détecté. Fais défiler ton dressing puis clique « Relire ».</p></div>'}
+      <div class="profile-list">${onSale.map((c) => {
+        const lib = index[c.id];
+        return `<div class="profile-item" data-id="${esc(c.id)}">
+          ${c.photo ? `<img src="${esc(c.photo)}" alt="">` : `<div class="ph">${icon('tag', 14)}</div>`}
+          <div class="grow"><div class="ellipsis">${lib ? `<span class="sku">${esc(lib.sku)}</span> ` : ''}${esc(c.title)}</div>
+            <div class="small muted num">${c.price != null ? `${esc(VAI.formatPrice(c.price))} €` : ''}</div>
+            <div class="sold-form" hidden><input class="input num" inputmode="decimal" value="${c.price ?? ''}" aria-label="Prix de vente"><button class="btn primary sm" data-act="confirm-sold">OK</button></div>
+            <div class="small done"></div></div>
+          <div class="item-actions">
+            <a class="btn sm ghost" href="${esc(c.url)}">${icon('external', 12)} Voir</a>
+            <button class="btn sm" data-act="sold">${icon('check', 12)} Vendu</button>
+          </div></div>`;
+      }).join('')}</div>
+      <div class="actions"><button class="btn sm ghost" data-act="reread">${icon('refresh', 12)} Relire</button>
+      ${onSale.some((c) => !index[c.id]) ? `<button class="btn sm ghost" data-act="import">${icon('book', 12)} Tout ajouter à la bibliothèque</button>` : ''}</div>
+    </div>`;
+    view.querySelector('[data-act=reread]').onclick = () => renderProfile(view);
+    view.querySelector('[data-act=import]')?.addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        for (const c of onSale.filter((c) => !index[c.id])) {
+          await send('library:create', { data: { title: c.title, price: c.price, vintedId: c.id, vintedUrl: c.url, status: 'listed' } });
+        }
+        await VAI.refreshIndex?.();
+        renderProfile(view);
+      }),
+    );
+    view.querySelectorAll('.profile-item').forEach((row) => {
+      const c = onSale.find((x) => x.id === row.dataset.id);
+      const form = row.querySelector('.sold-form');
+      row.querySelector('[data-act=sold]').onclick = () => {
+        form.hidden = !form.hidden;
+        if (!form.hidden) form.querySelector('input').select();
+      };
+      const confirm = async () => {
+        const soldPrice = VAI.parsePrice(form.querySelector('input').value) ?? c.price;
+        const lib = index[c.id];
+        const item = lib
+          ? await send('library:update', { ref: lib.id, patch: { status: 'sold', soldPrice, soldAt: Date.now() } })
+          : await send('library:create', { data: { title: c.title, price: c.price, soldPrice, vintedId: c.id, vintedUrl: c.url, status: 'sold', soldAt: Date.now() } });
+        form.hidden = true;
+        row.classList.add('is-sold');
+        row.querySelector('.done').innerHTML = `${icon('check', 12)} Vendu ${esc(VAI.formatPrice(soldPrice) || '')} € — enregistré <span class="sku">${esc(item.sku)}</span>`;
+        row.querySelector('[data-act=sold]').disabled = true;
+        VAI.refreshIndex?.();
+      };
+      form.querySelector('[data-act=confirm-sold]').onclick = confirm;
+      form.querySelector('input').addEventListener('keydown', (e) => e.key === 'Enter' && confirm());
+    });
+  }
+
   // ---------- library tab ----------
   async function renderLibrary() {
     const view = $('[data-view=library]');
@@ -814,8 +888,9 @@
   // ---------- page-aware boot ----------
   function updatePageChip() {
     $('.page-chip').textContent = PAGE_LABEL[VAI.pageType()];
-    const inbox = VAI.pageType() === 'inbox';
-    $('[data-tab=listing]').innerHTML = `${icon(inbox ? 'chat' : 'wand', 14)} ${inbox ? 'Messages' : 'Annonce'}`;
+    const t = VAI.pageType();
+    const [ic, label] = t === 'inbox' ? ['chat', 'Messages'] : t === 'profile' ? ['book', 'Mes articles'] : ['wand', 'Annonce'];
+    $('[data-tab=listing]').innerHTML = `${icon(ic, 14)} ${label}`;
   }
   updatePageChip();
 

@@ -117,3 +117,15 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 .chip-btn:hover, .chip-btn:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
 .conv-head p { margin: 4px 0 0; }
 .conv-head a { color: var(--accent); }
+
+/* my profile: listings on sale */
+.profile-list { display: flex; flex-direction: column; gap: 8px; }
+.profile-item { display: flex; gap: 10px; align-items: flex-start; padding: 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); }
+.profile-item img, .profile-item .ph { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; flex: none; background: var(--surface-2); display: grid; place-items: center; color: var(--muted); }
+.profile-item .grow { flex: 1; min-width: 0; }
+.profile-item .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.profile-item .item-actions { display: flex; flex-direction: column; gap: 4px; }
+.profile-item .sold-form { display: flex; gap: 6px; margin-top: 6px; }
+.profile-item .sold-form .input { width: 90px; }
+.profile-item .done { color: var(--success); margin-top: 4px; }
+.profile-item.is-sold { opacity: .7; }

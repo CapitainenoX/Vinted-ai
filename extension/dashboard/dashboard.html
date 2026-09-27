@@ -31,10 +31,24 @@
       </div>
       <div class="kpis" id="kpis"></div>
       <div class="grid-2">
-        <div class="card"><div class="card-head"><h2>Ventes par semaine</h2><span class="muted small" id="chart-total"></span></div><div id="chart"></div></div>
+        <div class="card"><div class="card-head"><h2>Chiffre d'affaires cumulé</h2><span class="muted small" id="cum-total"></span></div><div class="chart" id="chart-cum"></div></div>
+        <div class="card"><div class="card-head"><h2>Ventes par semaine</h2><span class="muted small" id="chart-total"></span></div><div class="chart" id="chart"></div></div>
+      </div>
+      <div class="grid-2">
+        <div class="card"><div class="card-head"><h2>Quand ça se vend</h2><span class="muted small">jour × heure des ventes</span></div><div class="chart" id="chart-heat"></div></div>
+        <div class="card"><div class="card-head"><h2>Heure de publication</h2><span class="muted small" id="pub-note"></span></div><div class="chart" id="chart-pub"></div></div>
+      </div>
+      <div class="grid-3">
+        <div class="card"><div class="card-head"><h2>Délai de vente</h2></div><div class="chart" id="chart-delay"></div></div>
+        <div class="card"><div class="card-head"><h2>Stock par statut</h2></div><div class="chart" id="chart-status"></div></div>
         <div class="card"><div class="card-head"><h2>Top marques (CA)</h2></div><div id="brands"></div></div>
       </div>
+      <div class="grid-2">
+        <div class="card"><div class="card-head"><h2>Dernières ventes</h2><span class="muted small">date, heure, délai, marge</span></div><div id="sales"></div></div>
+        <div class="card"><div class="card-head"><h2>Notes &amp; commentaires</h2><span class="muted small">tes notes sur les articles</span></div><div id="notes"></div></div>
+      </div>
       <div class="card"><div class="card-head"><h2>À relancer</h2><span class="muted small">En vente depuis plus de 21 jours — republie ou baisse le prix de 10 %+ (notifie les favoris).</span></div><div id="stale"></div></div>
+      <p class="small muted backup-line" id="backup-line"></p>
     </section>
 
     <!-- Library -->
@@ -92,6 +106,8 @@
           <div><label class="label" for="vintedDomain">Site Vinted</label><select class="select" id="vintedDomain" name="vintedDomain"></select></div>
           <div><label class="label" for="feePercent">Frais vendeur (%)</label><input class="input num" id="feePercent" name="feePercent" type="number" min="0" max="50" step="0.5"></div>
         </div>
+        <label class="label" for="messageTone">Ton des messages aux clients</label>
+        <select class="select" id="messageTone" name="messageTone"><option value="vous">Vouvoiement (recommandé)</option><option value="tu">Tutoiement</option></select>
         <label class="label" for="sellerProfile">Ton profil (l'agent s'en sert)</label>
         <textarea class="textarea" id="sellerProfile" name="sellerProfile" rows="3" placeholder="Ex : je revends du streetwear et du vintage 90s, envoi sous 24 h, réduction lots -15 %, public 18-30 ans."></textarea>
         <label class="check"><input type="checkbox" id="panelOpenOnForm" name="panelOpenOnForm"> Ouvrir le panel automatiquement sur le formulaire « Vendre »</label>

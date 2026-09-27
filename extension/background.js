@@ -8,7 +8,7 @@ import { TOOL_DEFS, runTool, searchVinted, analyzePhotos, askTab } from './lib/t
 const MAX_STEPS = 8;
 const TOOL_RESULT_CHARS = 4000; // latest tool results
 const OLD_TOOL_CHARS = 1200; // earlier tool results in the same turn (free tiers count every token again at each step)
-const HISTORY_MESSAGES = 16; // past messages sent to the model
+const HISTORY_MESSAGES = 10; // past messages sent to the model
 const TOOL_TIMEOUT_MS = { analyze_photos: 90000, default: 30000 };
 
 // ---------- one-shot messages ----------
@@ -52,7 +52,8 @@ const handlers = {
   },
   'library:export': () => store.exportAll(),
   'library:import': ({ data }) => store.importAll(data),
-  'library:stats': async () => store.computeStats(await store.listItems(), (await store.getSettings()).feePercent),
+  'library:stats': async () => store.computeStats(await store.statsItems(), (await store.getSettings()).feePercent),
+  'backup:info': () => store.backupInfo(),
   // Map of vintedId -> { sku, id, status, notes } for badge injection on Vinted pages.
   'library:index': async () => {
     const index = {};
@@ -103,6 +104,15 @@ chrome.declarativeNetRequest
     ],
   })
   .catch((e) => console.warn('DNR rule failed', e));
+
+// Library safety net: mirror to chrome.storage.sync (debounced), restore it if local data is ever empty.
+let backupTimer = null;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !(changes.library || changes.salesArchive)) return;
+  clearTimeout(backupTimer);
+  backupTimer = setTimeout(() => store.backupToSync().catch((e) => console.warn('backup', e)), 3000);
+});
+store.restoreFromSyncIfEmpty().catch(() => {});
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') chrome.tabs.create({ url: chrome.runtime.getURL('dashboard/dashboard.html#settings') });
@@ -159,12 +169,12 @@ async function runAgent({ chatId, text, images = [], pageContext }, { tabId, emi
 
   const messages = [
     { role: 'system', content: agentSystemPrompt(settings, { page: pageContext }) },
-    ...history.slice(-HISTORY_MESSAGES).map(({ role, content }) => ({ role, content: String(content || '').slice(0, 4000) })),
+    ...history.slice(-HISTORY_MESSAGES).map(({ role, content }) => ({ role, content: String(content || '').slice(0, 2500) })),
     { role: 'user', content: userContent },
   ];
   history.push({ role: 'user', content: userContent, display: text, images: images.length });
 
-  const llm = (opts) => chatCompletion(settings, { model: settings.chatModel, messages, signal, temperature: 0.4, onRetry: status, ...opts });
+  const llm = (opts) => chatCompletion(settings, { model: settings.chatModel, messages, signal, temperature: 0.4, maxTokens: 1500, onRetry: status, ...opts });
   const finish = async (answer) => {
     history.push({ role: 'assistant', content: answer, ...(cards.length ? { cards } : {}) });
     await store.saveChat(chatId, history);
@@ -252,6 +262,8 @@ function withTimeout(promise, ms, name) {
 function summarize(name, r) {
   if (!r) return 'ok';
   switch (name) {
+    case 'open_page':
+      return 'page ouverte';
     case 'search_vinted':
       return r.stats ? `${r.count} annonces · médiane ${r.stats.median} € (${r.stats.min}–${r.stats.max} €)` : `${r.count} annonces, pas de prix`;
     case 'web_search':
@@ -324,8 +336,8 @@ async function suggestMessages({ mode = 'reply', conversation = null, item = nul
     model: settings.chatModel,
     messages: [{ role: 'user', content: messagesPrompt({ mode, conversation, item: target, libItem, instruction: String(instruction || '').slice(0, 500), settings }) }],
     json: true,
-    temperature: 0.7,
-    maxTokens: 1400,
+    temperature: 0.5,
+    maxTokens: 900,
   });
   const out = parseJson(message.content);
   const replies = (Array.isArray(out.replies) ? out.replies : [])

@@ -54,13 +54,14 @@ export const DEFAULT_SETTINGS = {
   panelOpenOnForm: true,
   // Save the form's fields to the library when the seller clicks Vinted's Add / Save button.
   autoSaveOnPublish: true,
+  messageTone: 'vous', // buyer messages: 'vous' (default) or 'tu'
   // Numbers of sold/archived items go back to the pool (their bag is free again).
   skuReuseSold: true,
   // Learned Vinted member id of the seller, used to recognise "my" listings.
   myMemberId: null,
 };
 
-const K = { settings: 'settings', library: 'library', chats: 'chats' };
+const K = { settings: 'settings', library: 'library', chats: 'chats', salesArchive: 'salesArchive' };
 
 const get = async (key, fallback) => (await chrome.storage.local.get(key))[key] ?? fallback;
 const set = (key, value) => chrome.storage.local.set({ [key]: value });
@@ -191,8 +192,60 @@ export async function updateItem(ref, patch) {
 export async function deleteItem(ref) {
   const items = await listItems();
   const idx = findIndexByRef(items, ref);
-  if (idx >= 0) items.splice(idx, 1);
+  if (idx < 0) return;
+  // A sale is history: deleting the item frees its number but the sale stays in the stats.
+  if (items[idx].status === 'sold') {
+    const { photos, history, ...sale } = items[idx];
+    await set(K.salesArchive, [...(await listSalesArchive()), { ...sale, deletedAt: Date.now() }]);
+  }
+  items.splice(idx, 1);
   await set(K.library, items);
+}
+
+export const listSalesArchive = () => get(K.salesArchive, []);
+// Everything the stats need: current items + sales of deleted items.
+export async function statsItems() {
+  return [...(await listItems()), ...(await listSalesArchive())];
+}
+
+// ---------- backup mirror in chrome.storage.sync (compact, no photos) ----------
+// Restores the library if local storage is ever emptied (profile reset, reinstall from the same folder).
+const SYNC_CHUNK = 7000;
+const slimForSync = (i) => ({
+  id: i.id, sku: i.sku, title: (i.title || '').slice(0, 70), brand: i.brand, size: i.size, status: i.status,
+  price: i.price, cost: i.cost, soldPrice: i.soldPrice, soldAt: i.soldAt, listedAt: i.listedAt, createdAt: i.createdAt,
+  vintedId: i.vintedId, notes: (i.notes || '').slice(0, 120), location: i.location, deletedAt: i.deletedAt,
+});
+export async function backupToSync() {
+  if (!chrome.storage.sync) return;
+  const all = [...(await listItems()), ...(await listSalesArchive())].sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  let json = JSON.stringify(all.map(slimForSync));
+  // chrome.storage.sync holds ~100 KB: keep the most recent items if the library is bigger.
+  while (json.length > 90000 && all.length) {
+    all.pop();
+    json = JSON.stringify(all.map(slimForSync));
+  }
+  const chunks = {};
+  for (let i = 0; i * SYNC_CHUNK < json.length; i++) chunks[`bk${i}`] = json.slice(i * SYNC_CHUNK, (i + 1) * SYNC_CHUNK);
+  const old = await chrome.storage.sync.get(null);
+  const stale = Object.keys(old).filter((k) => /^bk\d+$/.test(k) && !(k in chunks));
+  if (stale.length) await chrome.storage.sync.remove(stale);
+  await chrome.storage.sync.set({ ...chunks, bkMeta: { at: Date.now(), n: all.length, chunks: Object.keys(chunks).length } });
+}
+export async function restoreFromSyncIfEmpty() {
+  if (!chrome.storage.sync || (await listItems()).length || (await listSalesArchive()).length) return 0;
+  const data = await chrome.storage.sync.get(null);
+  if (!data.bkMeta) return 0;
+  let json = '';
+  for (let i = 0; i < data.bkMeta.chunks; i++) json += data[`bk${i}`] || '';
+  const all = JSON.parse(json || '[]');
+  await set(K.library, all.filter((i) => !i.deletedAt).map((i) => ({ tags: [], photos: [], history: [{ at: Date.now(), event: 'restored' }], ...i })));
+  await set(K.salesArchive, all.filter((i) => i.deletedAt));
+  return all.length;
+}
+export async function backupInfo() {
+  const { bkMeta } = chrome.storage.sync ? await chrome.storage.sync.get('bkMeta') : {};
+  return bkMeta || null;
 }
 
 // Change an item's number. If another active item holds it: error, or swap numbers when asked.
@@ -249,7 +302,7 @@ export async function saveChat(id, messages) {
 // ---------- export / import ----------
 export async function exportAll() {
   const { apiKey, tavilyKey, myMemberId, ...safeSettings } = await getSettings(); // never export secrets
-  return { app: 'vinted-ai', version: 1, exportedAt: new Date().toISOString(), settings: safeSettings, library: await listItems() };
+  return { app: 'vinted-ai', version: 1, exportedAt: new Date().toISOString(), settings: safeSettings, library: await listItems(), salesArchive: await listSalesArchive() };
 }
 export async function importAll(data) {
   if (!data || data.app !== 'vinted-ai' || !Array.isArray(data.library)) throw new Error('Fichier non reconnu');
@@ -258,6 +311,11 @@ export async function importAll(data) {
   for (const it of data.library) if (it && it.id && it.sku) byId.set(it.id, it);
   const merged = [...byId.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   await set(K.library, merged);
+  if (Array.isArray(data.salesArchive)) {
+    const arch = new Map((await listSalesArchive()).map((i) => [i.id, i]));
+    for (const it of data.salesArchive) if (it?.id) arch.set(it.id, it);
+    await set(K.salesArchive, [...arch.values()]);
+  }
   return merged.length;
 }
 

@@ -23,16 +23,16 @@ http.createServer((req, res) => {
     let out;
     if (Array.isArray(last.content) && last.content.some((c) => c.type === 'image_url')) out = reply({ role: 'assistant', content: JSON.stringify(vision) });
     else if (text.includes('Audite cette annonce Vinted')) out = reply({ role: 'assistant', content: JSON.stringify(audit) });
-    else if (text.includes('Tu rédiges des messages Vinted')) {
+    else if (text.includes('Tu écris les messages Vinted')) {
       // Echo what the prompt contained so the e2e can check the thread was read (and who said what).
       const lastClient = [...text.matchAll(/CLIENT : (.*)/g)].at(-1)?.[1] || '';
       const consigne = (text.match(/Consigne du vendeur[^:]*: (.*)/) || [])[1] || '';
-      const fav = text.includes('mis cet article en favori');
+      const fav = text.includes("mis l'article en favori");
       const kinds = fav ? ['offer', 'follow_up', 'bundle'] : ['reply', 'follow_up', 'offer'];
       out = reply({ role: 'assistant', content: JSON.stringify({
         summary: fav ? 'Article en favori' : `Dernier message client : ${lastClient}`,
-        buyer_intent: `vendeur-lu:${/VENDEUR \(moi\) : Oui toujours/.test(text)}`,
-        replies: kinds.map((k, i) => ({ kind: k, label: `Option ${i + 1}`, text: `${consigne ? `[${consigne}] ` : ''}Bonjour julie_b, message ${k}.`, price: k === 'offer' ? 19 : null })),
+        buyer_intent: `vendeur-lu:${/MOI : Oui toujours/.test(text)}`,
+        replies: kinds.map((k, i) => ({ kind: k, label: `Option ${i + 1}`, text: `${consigne ? `[${consigne}] ` : ''}Bonjour julie_b, message ${k}.${/VOUVOIEMENT obligatoire/.test(text) ? '' : ' (tu)'}`, price: k === 'offer' ? 19 : null })),
       }) });
     }
     else if (text.includes("Rédige l'annonce Vinted optimale")) out = reply({ role: 'assistant', content: '```json\n' + JSON.stringify(listing) + '\n```' });
@@ -51,7 +51,7 @@ http.createServer((req, res) => {
           ] }));
       } else if (last.role === 'user') out = reply(call('search_vinted', { query: 'sweat nike club' }));
       else if (toolMsgs === 1) out = reply(call('propose_listing', { title: listing.title, description: listing.description, price: 24, price_fast: 19, price_max: 29, price_reasoning: 'Médiane 25 € sur 3 annonces', brand: 'Nike', size: 'M' }));
-      else out = reply({ role: 'assistant', content: '## Prix conseillé\n- **24 €** (médiane du marché)\n- Rapide : 19 €' });
+      else out = reply({ role: 'assistant', content: '## Prix conseillé\n- **24 €** (médiane du marché)\n- Rapide : 19 €\n\n| Option | Prix |\n|---|---|\n| Rapide | 19 € |\n| Conseillé | 24 € |' });
     } else if (text.includes('Réponds maintenant')) out = reply({ role: 'assistant', content: 'Réponse finale après les outils.' });
     else out = reply({ role: 'assistant', content: 'OK' });
     res.setHeader('Content-Type', 'application/json');

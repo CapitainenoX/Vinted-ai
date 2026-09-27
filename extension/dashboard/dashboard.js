@@ -53,7 +53,7 @@ async function renderOverview() {
   const days = +$('#range').value;
   const since = days ? Date.now() - days * 86400000 : 0;
   const inRange = items.filter((i) => i.status !== 'sold' || (i.soldAt || 0) >= since);
-  const s = store.computeStats(inRange, settings.feePercent);
+  const s = store.computeStats([...inRange, ...(await store.listSalesArchive()).filter((i) => (i.soldAt || 0) >= since)], settings.feePercent);
 
   const kpis = [
     ['Chiffre d\'affaires', eur(s.revenue), `${s.sold} vente(s)`],
@@ -65,10 +65,23 @@ async function renderOverview() {
   ];
   $('#kpis').innerHTML = kpis.map(([k, v, sub]) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${sub}</div></div>`).join('');
 
-  drawWeekly(items.filter((i) => i.status === 'sold' && i.soldAt), days || 365);
+  const all = await store.statsItems(); // includes sales of deleted items: a sale is never lost
+  const soldAll = all.filter((i) => i.status === 'sold' && i.soldAt);
+  const sold = soldAll.filter((i) => i.soldAt >= since);
+  drawCumulative(sold);
+  drawWeekly(sold, days || 365);
+  drawHeatmap(sold);
+  drawPublishHours(all.filter((i) => i.listedAt || (i.status !== 'draft' && i.createdAt)));
+  drawDelay(sold);
+  drawStatus(items);
+  drawSales(sold);
+  drawNotes(items);
+  window.VAI.send('backup:info').then((b) => {
+    $('#backup-line').textContent = b ? `Sauvegarde automatique : ${b.n} article(s) le ${new Date(b.at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })} (synchronisée avec ton compte Chrome). Tes ventes restent même si tu supprimes un article.` : '';
+  }).catch(() => {});
   const max = s.topBrands[0]?.[1] || 1;
   $('#brands').innerHTML = s.topBrands.length
-    ? s.topBrands.map(([b, v]) => `<div class="brand-row"><span>${esc(b)}</span><div class="track"><div class="fill" style="width:${(v / max) * 100}%"></div></div><span class="num">${eur(v)}</span></div>`).join('')
+    ? s.topBrands.map(([b, v]) => `<div class="brand-row" data-tip="${esc(b)} : ${eur(v)}"><span>${esc(b)}</span><div class="track"><div class="fill" style="width:${(v / max) * 100}%"></div></div><span class="num">${eur(v)}</span></div>`).join('')
     : '<p class="muted small">Pas encore de ventes avec une marque renseignée.</p>';
 
   const stale = items.filter((i) => i.status === 'listed' && Date.now() - (i.listedAt || i.createdAt) > 21 * 86400000).sort((a, b) => (a.listedAt || a.createdAt) - (b.listedAt || b.createdAt));
@@ -80,6 +93,61 @@ async function renderOverview() {
 }
 $('#range').onchange = renderOverview;
 
+// ---------- charts (plain SVG, one accent hue, hover tooltip on every mark) ----------
+const DAYS = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+const dow = (t) => (new Date(t).getDay() + 6) % 7;
+const hour = (t) => new Date(t).getHours();
+const when = (t) => new Date(t).toLocaleString('fr-FR', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+const saleValue = (i) => i.soldPrice ?? i.price ?? 0;
+const emptyChart = (el, msg) => (($(el).innerHTML = `<p class="muted small empty-chart">${msg}</p>`), true);
+// Bar with rounded data-end, square at the baseline.
+const barPath = (x, y, w, h, r = 4) => {
+  if (h <= 0) return '';
+  r = Math.min(r, w / 2, h);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+};
+const niceMax = (v) => {
+  const p = 10 ** Math.floor(Math.log10(Math.max(v, 1)));
+  return Math.ceil(v / p) * p || 1;
+};
+
+// One tooltip for every chart: any element with data-tip.
+const tip = document.createElement('div');
+tip.className = 'tip';
+tip.hidden = true;
+document.body.appendChild(tip);
+document.addEventListener('mousemove', (e) => {
+  const t = e.target.closest?.('[data-tip]');
+  if (!t) return (tip.hidden = true);
+  tip.textContent = t.dataset.tip;
+  tip.hidden = false;
+  const x = Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8);
+  tip.style.transform = `translate(${x}px, ${e.clientY - tip.offsetHeight - 10}px)`;
+});
+
+function drawCumulative(sold) {
+  const pts = [...sold].sort((a, b) => a.soldAt - b.soldAt);
+  $('#cum-total').textContent = pts.length ? `${eur(pts.reduce((a, i) => a + saleValue(i), 0))} · ${pts.length} vente(s)` : '';
+  if (!pts.length) return emptyChart('#chart-cum', 'Ta première vente apparaîtra ici.');
+  const W = 600, H = 200, pad = { l: 44, r: 12, t: 12, b: 24 };
+  const t0 = Math.min(pts[0].soldAt, Date.now() - 7 * 86400000), t1 = Date.now();
+  let acc = 0;
+  const series = [{ t: t0, v: 0 }, ...pts.map((i) => ({ t: i.soldAt, v: (acc += saleValue(i)), i }))];
+  series.push({ t: t1, v: acc });
+  const top = niceMax(acc);
+  const x = (t) => pad.l + ((t - t0) / (t1 - t0 || 1)) * (W - pad.l - pad.r);
+  const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - v / top);
+  // Step line: revenue jumps at each sale.
+  let d = `M${x(series[0].t)},${y(0)}`;
+  for (let k = 1; k < series.length; k++) d += `H${x(series[k].t)}V${y(series[k].v)}`;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Chiffre d'affaires cumulé">`;
+  for (const f of [0, 0.5, 1]) svg += `<line class="grid" x1="${pad.l}" x2="${W - pad.r}" y1="${y(top * f)}" y2="${y(top * f)}"/><text x="${pad.l - 6}" y="${y(top * f) + 4}" text-anchor="end">${eur(top * f)}</text>`;
+  svg += `<path class="area" d="${d}V${y(0)}Z"/><path class="line" d="${d}"/>`;
+  for (const p of series.filter((p) => p.i)) svg += `<circle class="dot" cx="${x(p.t)}" cy="${y(p.v)}" r="4" data-tip="${esc(`${when(p.t)} · ${p.i.title || p.i.sku} · +${eur(saleValue(p.i))} → ${eur(p.v)}`)}"/>`;
+  svg += `<text x="${pad.l}" y="${H - 6}">${date(t0)}</text><text x="${W - pad.r}" y="${H - 6}" text-anchor="end">aujourd'hui</text>`;
+  $('#chart-cum').innerHTML = svg + '</svg>';
+}
+
 function drawWeekly(sold, days) {
   const weeks = Math.min(52, Math.max(4, Math.ceil(days / 7)));
   const start = startOfWeek(Date.now()) - (weeks - 1) * 7 * 86400000;
@@ -87,26 +155,128 @@ function drawWeekly(sold, days) {
   for (const i of sold) {
     const idx = Math.floor((i.soldAt - start) / (7 * 86400000));
     if (idx >= 0 && idx < weeks) {
-      buckets[idx].v += i.soldPrice ?? i.price ?? 0;
+      buckets[idx].v += saleValue(i);
       buckets[idx].n++;
     }
   }
-  const W = 600, H = 200, pad = { l: 36, r: 8, t: 10, b: 22 };
-  const max = Math.max(10, ...buckets.map((b) => b.v));
-  const nice = Math.ceil(max / 10) * 10;
+  const W = 600, H = 200, pad = { l: 44, r: 8, t: 12, b: 24 };
+  const top = niceMax(Math.max(10, ...buckets.map((b) => b.v)));
   const bw = (W - pad.l - pad.r) / weeks;
-  const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - v / nice);
+  const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - v / top);
   let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Chiffre d'affaires par semaine">`;
-  for (const f of [0, 0.5, 1]) svg += `<line class="grid" x1="${pad.l}" x2="${W - pad.r}" y1="${y(nice * f)}" y2="${y(nice * f)}"/><text x="${pad.l - 6}" y="${y(nice * f) + 4}" text-anchor="end">${Math.round(nice * f)}€</text>`;
+  for (const f of [0, 0.5, 1]) svg += `<line class="grid" x1="${pad.l}" x2="${W - pad.r}" y1="${y(top * f)}" y2="${y(top * f)}"/><text x="${pad.l - 6}" y="${y(top * f) + 4}" text-anchor="end">${eur(top * f)}</text>`;
   buckets.forEach((b, i) => {
-    const h = y(0) - y(b.v);
-    svg += `<rect class="bar" x="${pad.l + i * bw + bw * 0.15}" y="${y(b.v)}" width="${bw * 0.7}" height="${Math.max(h, b.v ? 2 : 0)}" rx="2"><title>Semaine du ${date(b.t)} : ${eur(b.v)} (${b.n} vente${b.n > 1 ? 's' : ''})</title></rect>`;
-    if (i % Math.ceil(weeks / 8) === 0) svg += `<text x="${pad.l + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${date(b.t)}</text>`;
+    const bx = pad.l + i * bw + 1;
+    // Hit target = the whole column, so empty weeks are hoverable too.
+    svg += `<rect class="hit" x="${bx}" y="${pad.t}" width="${bw - 2}" height="${H - pad.t - pad.b}" data-tip="Semaine du ${date(b.t)} : ${eur(b.v)} · ${b.n} vente(s)"/>`;
+    svg += `<path class="bar" d="${barPath(bx + bw * 0.12, y(b.v), bw * 0.76 - 2, y(0) - y(b.v))}" data-tip="Semaine du ${date(b.t)} : ${eur(b.v)} · ${b.n} vente(s)"/>`;
+    if (i % Math.ceil(weeks / 8) === 0) svg += `<text x="${bx + bw / 2}" y="${H - 6}" text-anchor="middle">${date(b.t)}</text>`;
   });
-  $('#chart').className = 'chart';
   $('#chart').innerHTML = svg + '</svg>';
-  const total = buckets.reduce((a, b) => a + b.v, 0);
-  $('#chart-total').textContent = `${eur(total)} sur ${weeks} semaines`;
+  $('#chart-total').textContent = `${eur(buckets.reduce((a, b) => a + b.v, 0))} sur ${weeks} semaines`;
+}
+
+function drawHeatmap(sold) {
+  if (!sold.length) return emptyChart('#chart-heat', 'Les jours et heures de tes ventes s’afficheront ici.');
+  const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
+  for (const i of sold) grid[dow(i.soldAt)][hour(i.soldAt)]++;
+  const max = Math.max(...grid.flat());
+  const W = 600, cell = 20, gap = 2, l = 34, t = 4;
+  const H = t + 7 * (cell + gap) + 20;
+  const cw = (W - l - 4) / 24;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Ventes par jour et heure">`;
+  grid.forEach((row, d) => {
+    svg += `<text x="${l - 6}" y="${t + d * (cell + gap) + cell / 2 + 4}" text-anchor="end">${DAYS[d]}</text>`;
+    row.forEach((n, h) => {
+      const op = n ? 0.25 + 0.75 * (n / max) : 1;
+      svg += `<rect class="${n ? 'heat' : 'heat-0'}" x="${l + h * cw}" y="${t + d * (cell + gap)}" width="${cw - gap}" height="${cell}" rx="3" style="opacity:${op}" data-tip="${DAYS[d]} ${h} h–${h + 1} h : ${n} vente(s)"/>`;
+    });
+  });
+  for (const h of [0, 6, 12, 18, 23]) svg += `<text x="${l + h * cw + cw / 2}" y="${H - 4}" text-anchor="middle">${h} h</text>`;
+  $('#chart-heat').innerHTML = svg + '</svg>';
+}
+
+function drawPublishHours(listed) {
+  const pubAt = (i) => i.listedAt || i.createdAt;
+  if (!listed.length) {
+    $('#pub-note').textContent = '';
+    return emptyChart('#chart-pub', 'Publie des articles : je te montrerai les heures qui vendent le mieux.');
+  }
+  const hrs = Array.from({ length: 24 }, () => ({ n: 0, sold: 0 }));
+  for (const i of listed) {
+    const h = hrs[hour(pubAt(i))];
+    h.n++;
+    if (i.status === 'sold') h.sold++;
+  }
+  const best = hrs.map((h, k) => ({ k, rate: h.sold / (h.n || 1), n: h.n })).filter((h) => h.n >= 2).sort((a, b) => b.rate - a.rate)[0];
+  $('#pub-note').textContent = best && best.rate > 0 ? `meilleur créneau : ${best.k} h (${Math.round(best.rate * 100)} % vendus)` : 'articles publiés par heure';
+  const W = 600, H = 200, pad = { l: 28, r: 8, t: 12, b: 24 };
+  const top = niceMax(Math.max(2, ...hrs.map((h) => h.n)));
+  const bw = (W - pad.l - pad.r) / 24;
+  const y = (v) => pad.t + (H - pad.t - pad.b) * (1 - v / top);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Articles publiés par heure, dont vendus">`;
+  for (const f of [0, 1]) svg += `<line class="grid" x1="${pad.l}" x2="${W - pad.r}" y1="${y(top * f)}" y2="${y(top * f)}"/><text x="${pad.l - 6}" y="${y(top * f) + 4}" text-anchor="end">${Math.round(top * f)}</text>`;
+  hrs.forEach((h, k) => {
+    const bx = pad.l + k * bw + bw * 0.14, w = bw * 0.72;
+    const tipText = `Publiés à ${k} h : ${h.n} · vendus ${h.sold}${h.n ? ` (${Math.round((h.sold / h.n) * 100)} %)` : ''}`;
+    svg += `<rect class="hit" x="${pad.l + k * bw}" y="${pad.t}" width="${bw}" height="${H - pad.t - pad.b}" data-tip="${tipText}"/>`;
+    // Stacked: sold at the base, the rest above, with a 2px surface gap between.
+    if (h.n - h.sold > 0) svg += `<path class="bar soft" d="${barPath(bx, y(h.n), w, y(h.sold) - y(h.n) - (h.sold ? 2 : 0))}" data-tip="${tipText}"/>`;
+    if (h.sold) svg += `<path class="bar" d="${h.n - h.sold > 0 ? `M${bx},${y(0)}V${y(h.sold)}H${bx + w}V${y(0)}Z` : barPath(bx, y(h.sold), w, y(0) - y(h.sold))}" data-tip="${tipText}"/>`;
+    if (k % 3 === 0) svg += `<text x="${pad.l + k * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${k} h</text>`;
+  });
+  $('#chart-pub').innerHTML = svg + '</svg><div class="legend"><span><i class="sw"></i>vendus</span><span><i class="sw soft"></i>pas encore vendus</span></div>';
+}
+
+function drawDelay(sold) {
+  const withDelay = sold.filter((i) => i.listedAt || i.createdAt);
+  if (!withDelay.length) return emptyChart('#chart-delay', 'Aucune vente sur la période.');
+  const B = [['< 1 j', 1], ['1–3 j', 3], ['3–7 j', 7], ['1–2 sem.', 14], ['2–4 sem.', 30], ['> 1 mois', Infinity]];
+  const counts = B.map(() => 0);
+  for (const i of withDelay) {
+    const d = (i.soldAt - (i.listedAt || i.createdAt)) / 86400000;
+    counts[B.findIndex(([, lim]) => d < lim)]++;
+  }
+  const max = Math.max(...counts);
+  $('#chart-delay').innerHTML = B.map(([label], k) => `<div class="hbar" data-tip="${label} : ${counts[k]} vente(s)"><span>${label}</span><div class="track"><div class="fill" style="width:${(counts[k] / max) * 100}%"></div></div><span class="num">${counts[k]}</span></div>`).join('');
+}
+
+function drawStatus(items) {
+  const S = [['listed', 'En vente', 'st-listed'], ['sold', 'Vendus', 'st-sold'], ['draft', 'Brouillons', 'st-draft'], ['archived', 'Archivés', 'st-archived']];
+  const counts = S.map(([k]) => items.filter((i) => i.status === k).length);
+  const total = counts.reduce((a, b) => a + b, 0);
+  if (!total) return emptyChart('#chart-status', 'Ta bibliothèque est vide.');
+  const R = 60, r = 40, C = 70;
+  let a0 = -Math.PI / 2, svg = `<svg viewBox="0 0 140 140" class="donut" role="img" aria-label="Articles par statut">`;
+  S.forEach(([, label, cls], k) => {
+    if (!counts[k]) return;
+    const a1 = a0 + (counts[k] / total) * Math.PI * 2 - (counts[k] === total ? 0.0001 : 0);
+    const large = a1 - a0 > Math.PI ? 1 : 0;
+    const p = (rad, a) => `${C + rad * Math.cos(a)},${C + rad * Math.sin(a)}`;
+    svg += `<path class="${cls}" d="M${p(R, a0)}A${R},${R} 0 ${large} 1 ${p(R, a1)}L${p(r, a1)}A${r},${r} 0 ${large} 0 ${p(r, a0)}Z" data-tip="${label} : ${counts[k]} (${Math.round((counts[k] / total) * 100)} %)"/>`;
+    a0 = a1;
+  });
+  svg += `<text x="70" y="68" text-anchor="middle" class="donut-v">${total}</text><text x="70" y="84" text-anchor="middle">articles</text></svg>`;
+  $('#chart-status').innerHTML = `<div class="donut-wrap">${svg}<div class="legend col">${S.map(([, label, cls], k) => `<span><i class="sw ${cls}"></i>${label} <b class="num">${counts[k]}</b></span>`).join('')}</div></div>`;
+}
+
+function drawSales(sold) {
+  const last = [...sold].sort((a, b) => b.soldAt - a.soldAt).slice(0, 8);
+  $('#sales').innerHTML = last.length
+    ? last.map((i) => {
+        const d = i.listedAt || i.createdAt ? Math.max(0, Math.round((i.soldAt - (i.listedAt || i.createdAt)) / 86400000)) : null;
+        const margin = i.cost != null ? saleValue(i) - i.cost : null;
+        return `<div class="sale-row"><span class="sku">${esc(i.sku || '')}</span><div class="grow"><div class="ellipsis">${esc(i.title || '')}</div><div class="muted small">${when(i.soldAt)}${d != null ? ` · vendu en ${d} j` : ''}${i.deletedAt ? ' · supprimé de la bibliothèque' : ''}</div></div><div class="r"><div class="num">${eur(saleValue(i))}</div>${margin != null ? `<div class="small ${margin >= 0 ? 'pos' : 'neg'} num">${margin >= 0 ? '+' : ''}${eur(margin)}</div>` : ''}</div></div>`;
+      }).join('')
+    : '<p class="muted small">Quand tu marques un article « Vendu », la vente est enregistrée ici avec sa date et son heure.</p>';
+}
+
+function drawNotes(items) {
+  const withNotes = items.filter((i) => i.notes?.trim()).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 8);
+  $('#notes').innerHTML = withNotes.length
+    ? withNotes.map((i) => `<div class="note-row" data-open="${i.id}"><span class="sku">${esc(i.sku)}</span><div class="grow"><div class="ellipsis">${esc(i.notes)}</div><div class="muted small">${esc(i.title || '')} · ${date(i.updatedAt)}</div></div></div>`).join('')
+    : '<p class="muted small">Ajoute des notes à tes articles (emplacement, défaut, acheteur…) : elles s’afficheront ici.</p>';
+  $$('[data-open]', $('#notes')).forEach((el) => (el.onclick = () => openDrawer(items.find((i) => i.id === el.dataset.open))));
 }
 const startOfWeek = (t) => {
   const d = new Date(t);

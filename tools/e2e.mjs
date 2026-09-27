@@ -49,6 +49,7 @@ await ctx.route('https://www.vinted.fr/**', (route) => {
   const u = new URL(route.request().url());
   if (u.pathname === '/items/new') return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
   if (/^\/items\/\d+[^/]*\/edit/.test(u.pathname)) return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
+  if (u.pathname.startsWith('/member/42')) return route.fulfill({ contentType: 'text/html', body: fixture('profile.html') });
   if (u.pathname.startsWith('/inbox/')) return route.fulfill({ contentType: 'text/html', body: fixture('inbox.html') });
   if (u.pathname.startsWith('/items/888')) return route.fulfill({ contentType: 'text/html', body: '<meta charset="utf-8"><h1>Veste Zara en jean bleue L</h1><p>18,50 €</p>' });
   if (u.pathname.startsWith('/items/555')) return route.fulfill({ contentType: 'text/html', body: fixture('item.html') });
@@ -96,6 +97,8 @@ await panel.locator('.msg.assistant').last().waitFor({ timeout: 20000 });
 check((await panel.locator('.tool-line').count()) >= 2, 'agent called tools (search_vinted, propose_listing)');
 check(await panel.locator('.proposal').count() === 1, 'proposal card rendered');
 check((await panel.locator('.msg.assistant h4').textContent()).includes('Prix'), 'markdown answer rendered');
+check(await panel.locator('.msg.assistant .md-table tbody tr').count() === 2, 'markdown table rendered as a real table');
+check(await panel.locator('.results .res').count() === 3 && (await panel.locator('.results').textContent()).includes('médiane'), 'search results shown as clickable cards with price stats');
 // accept fields one by one: pick the "vendre vite" price, ignore the size
 const card = panel.locator('.proposal').last();
 check(await card.locator('.edit-row').count() >= 4, 'proposal split into per-field rows');
@@ -205,7 +208,7 @@ check((await p4.locator('.studio-state .sku').textContent()) === '#0001', 'conve
 check(await p4.locator('.suggestion').count() === 3, '3 messages proposed (reply / follow-up / offer)');
 await p4.locator('.suggestion').first().locator('[data-act=insert]').click();
 const boxText = await inbox.locator('[data-testid=message-input] textarea').inputValue();
-check(boxText === 'Bonjour julie_b, message reply.', 'message put in Vinted\'s reply box (not sent)');
+check(boxText === 'Bonjour julie_b, message reply.', 'message put in Vinted\'s reply box (not sent), vouvoiement by default');
 await p4.locator('[data-q="Refuse poliment"]').click();
 await p4.locator('.suggestion textarea', { hasText: '[Refuse poliment]' }).first().waitFor({ timeout: 15000 });
 check(true, 'instruction adapts the 3 messages');
@@ -234,7 +237,11 @@ await sw.evaluate(async () => {
 await dash.goto(`chrome-extension://${id}/dashboard/dashboard.html#overview`);
 await dash.locator('.kpi').first().waitFor();
 check((await dash.locator('#kpis').textContent()).includes('26'), 'dashboard KPIs computed');
-check(await dash.locator('.chart .bar').count() > 0, 'weekly chart drawn');
+check(await dash.locator('#chart .bar').count() > 0, 'weekly chart drawn');
+check(await dash.locator('#chart-heat rect.heat').count() === 1, 'sales heatmap (day × hour) drawn');
+check(await dash.locator('#chart-cum .dot').count() === 1 && await dash.locator('#chart-status path').count() === 2, 'cumulative revenue + status donut drawn');
+check((await dash.locator('#sales .sale-row').first().textContent()).includes('vendu en 7 j'), 'last sales list with date, hour and delay');
+check(await dash.locator('#chart-pub .bar').count() >= 1 && await dash.locator('#chart-delay .hbar').count() === 6, 'publication hours + delay distribution drawn');
 check(await dash.locator('#stale .stale-row').count() === 1, 'stale listing suggested for relist');
 await dash.screenshot({ path: `${shots}/4-overview.png` });
 await dash.goto(`chrome-extension://${id}/dashboard/dashboard.html#library`);
@@ -289,6 +296,33 @@ const saved = await sw.evaluate(async () => (await chrome.storage.local.get('lib
 check(saved?.price === 18.5 && saved.description.includes('portée 3 fois') && saved.status === 'listed', 'saved item has the form fields (title, description, price 18.5)');
 check(saved?.vintedId === '888' && saved.vintedUrl.endsWith('/items/888'), 'saved item linked to the new Vinted listing (#888)');
 await sell.screenshot({ path: `${shots}/8-saved-toast.png` });
+
+// 6. My profile: listings on sale → mark one as sold
+const prof = await ctx.newPage();
+prof.on('pageerror', (e) => errors.push(e.message + ' @ ' + e.stack));
+await prof.goto('https://www.vinted.fr/member/42-moi');
+const p6 = prof.locator('#vinted-ai-root');
+await p6.locator('.launcher').click();
+await p6.locator('.profile-item').first().waitFor({ timeout: 8000 });
+check((await p6.locator('[data-tab=listing]').textContent()).includes('Mes articles'), 'own profile → "Mes articles" tab');
+check(await p6.locator('.profile-item').count() === 2, 'listings on sale detected (sold one excluded)');
+check((await p6.locator('.profile-item').first().textContent()).includes('#0001'), 'library number shown on my listing');
+const jean = p6.locator('.profile-item', { hasText: "Jean Levi's" });
+await jean.locator('[data-act=sold]').click();
+await jean.locator('.sold-form input').fill('28');
+await jean.locator('[data-act=confirm-sold]').click();
+await jean.locator('.done', { hasText: 'Vendu' }).waitFor({ timeout: 5000 });
+const soldJean = await sw.evaluate(async () => (await chrome.storage.local.get('library')).library.find((i) => i.vintedId === '901'));
+check(soldJean?.status === 'sold' && soldJean.soldPrice === 28 && soldJean.soldAt > 0, 'marked sold from profile → saved with price + date');
+await prof.screenshot({ path: `${shots}/9-profile.png` });
+// a sold item deleted from the library stays in the sales stats
+const kept = await dash.evaluate(async () => {
+  const st = await import('../lib/storage.js');
+  const it = (await st.listItems()).find((i) => i.vintedId === '901');
+  await st.deleteItem(it.id);
+  return (await st.statsItems()).some((i) => i.vintedId === '901' && i.status === 'sold');
+});
+check(kept, 'deleting a sold item keeps the sale in the stats (sales archive)');
 
 check(errors.length === 0, `no page errors ${errors.length ? JSON.stringify(errors) : ''}`);
 await ctx.close();

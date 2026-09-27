@@ -31,74 +31,62 @@ const LISTING_PROPS = {
 };
 
 export const TOOL_DEFS = [
-  fn('search_vinted', 'Cherche des annonces comparables sur Vinted et renvoie les stats de prix (min, p25, médiane, p75, max) + les annonces.', {
-    query: str('Requête (marque + type + modèle)'),
+  fn('search_vinted', 'Annonces Vinted comparables + stats de prix. Affiche les résultats au vendeur en cartes.', {
+    query: str('marque + type + modèle'),
     order: { type: 'string', enum: ['relevance', 'price_low_to_high', 'price_high_to_low', 'newest_first'] },
     price_from: num('Prix min'),
     price_to: num('Prix max'),
-    limit: num('Nombre de résultats (max 96, défaut 30)'),
+    limit: num('max 60, défaut 30'),
   }, ['query']),
-  fn('web_search', 'Recherche web (prix neuf, référence, tendances, cote d\'une marque).', { query: str('Requête') }, ['query']),
-  fn('fetch_url', 'Lit le texte d\'une page web.', { url: str('URL complète') }, ['url']),
-  fn('read_page', 'Lit la page Vinted ouverte : type de page, champs du formulaire d\'annonce, ou infos de la fiche article.'),
-  fn('analyze_photos', 'Analyse les photos de l\'annonce en cours (formulaire ou fiche article) avec un modèle vision : marque, étiquette, taille, matière, défauts.', {
-    focus: str('Point à examiner en priorité (optionnel)'),
+  fn('open_page', 'Ouvre une page Vinted dans un onglet : un article (item_id) ou une recherche (search).', {
+    item_id: str('id de l\'article'),
+    search: str('texte de recherche'),
+    order: { type: 'string', enum: ['relevance', 'price_low_to_high', 'price_high_to_low', 'newest_first'] },
   }),
-  fn('propose_listing', 'Présente une annonce complète au vendeur avec des boutons Appliquer / Sauver en bibliothèque. À utiliser dès qu\'une annonce est rédigée.', LISTING_PROPS, ['title', 'description']),
-  fn('propose_edits', 'Propose des modifications champ par champ (annonce en cours ou fiche du vendeur). Le vendeur accepte ou ignore chaque modification séparément. Une entrée par champ, valeur finale prête à coller.', {
-    summary: str('1 phrase : ce que ces modifications améliorent'),
+  fn('web_search', 'Recherche web (prix neuf, référence, cote).', { query: str('Requête') }, ['query']),
+  fn('fetch_url', 'Texte d\'une page web.', { url: str('URL') }, ['url']),
+  fn('read_page', 'Lit la page Vinted ouverte (formulaire, fiche, conversation).'),
+  fn('analyze_photos', 'Analyse vision des photos de l\'annonce ouverte.', { focus: str('point à examiner') }),
+  fn('propose_listing', 'Affiche une annonce complète (champs applicables un par un).', LISTING_PROPS, ['title', 'description']),
+  fn('propose_edits', 'Propose des modifications champ par champ, acceptées une par une.', {
+    summary: str('1 phrase'),
     edits: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           field: { type: 'string', enum: ['title', 'description', 'price', 'brand', 'size', 'condition', 'color', 'material', 'category'] },
-          value: str('Nouvelle valeur complète (prix : nombre en euros)'),
-          reason: str('Pourquoi (court, chiffré si possible)'),
+          value: str('valeur finale complète'),
+          reason: str('pourquoi, court'),
         },
         required: ['field', 'value'],
       },
     },
   }, ['edits']),
-  fn('propose_price', 'Présente un prix avec 3 options cliquables (conseillé / vendre vite / ambitieux) que le vendeur peut appliquer. À utiliser dès que tu donnes un prix.', {
-    price: num('Prix conseillé'),
-    price_fast: num('Prix pour vendre vite'),
-    price_max: num('Prix ambitieux'),
-    reasoning: str('Sur quoi repose le prix (nb d\'annonces, médiane…)'),
-  }, ['price']),
-  fn('fill_form', 'Remplit directement le formulaire d\'annonce Vinted ouvert (seulement si le vendeur le demande).', LISTING_PROPS),
-  fn('library_search', 'Cherche dans la bibliothèque du vendeur.', {
-    query: str('Texte libre : numéro (#0012), titre, marque, note…'),
-    status: { type: 'string', enum: ['', 'draft', 'listed', 'sold', 'archived'] },
-  }),
-  fn('library_save', 'Ajoute un article à la bibliothèque (un numéro #XXXX est attribué).', {
-    ...LISTING_PROPS,
-    cost: num('Prix d\'achat'),
-    notes: str('Notes'),
-    status: { type: 'string', enum: ['draft', 'listed', 'sold', 'archived'] },
-  }, ['title']),
-  fn('library_update', 'Modifie un article de la bibliothèque (notes, statut, prix de vente, acheteur…).', {
-    ref: str('Numéro (#0012) ou id'),
-    patch: { type: 'object', description: 'Champs à modifier : title, description, price, cost, notes, status, soldPrice, buyer, location, tags…' },
-  }, ['ref', 'patch']),
-  fn('library_set_number', 'Change le numéro (#XXXX) d\'un article. swap=true échange avec l\'article qui a déjà ce numéro.', {
-    ref: str('Numéro actuel (#0012) ou id'),
-    number: num('Nouveau numéro'),
-    swap: { type: 'boolean', description: 'Échanger si le numéro est déjà pris' },
-  }, ['ref', 'number']),
-  fn('library_stats', 'Statistiques de ventes : CA, bénéfice, délai moyen de vente, top marques.'),
-  fn('relist_item', 'Republie un article de la bibliothèque : ouvre un nouveau formulaire Vinted pré-rempli.', { ref: str('Numéro (#0012) ou id') }, ['ref']),
+  fn('propose_price', 'Affiche 3 prix cliquables.', { price: num('conseillé'), price_fast: num('vendre vite'), price_max: num('ambitieux'), reasoning: str('base du prix') }, ['price']),
+  fn('fill_form', 'Remplit le formulaire Vinted (seulement si demandé explicitement).', LISTING_PROPS),
+  fn('library_search', 'Cherche dans la bibliothèque du vendeur.', { query: str('#0012, titre, marque, note…'), status: { type: 'string', enum: ['', 'draft', 'listed', 'sold', 'archived'] } }),
+  fn('library_save', 'Ajoute un article à la bibliothèque.', { ...LISTING_PROPS, cost: num('prix d\'achat'), notes: str('notes'), status: { type: 'string', enum: ['draft', 'listed', 'sold', 'archived'] } }, ['title']),
+  fn('library_update', 'Modifie un article (notes, statut, prix, soldPrice, numéro via number…).', {
+    ref: str('#0012 ou id'),
+    patch: { type: 'object', description: 'title, price, cost, notes, status, soldPrice, buyer, location…' },
+    number: num('nouveau numéro (optionnel)'),
+  }, ['ref']),
+  fn('library_stats', 'Stats de ventes (CA, bénéfice, délai, top marques, heures).'),
+  fn('relist_item', 'Republie un article de la bibliothèque (nouveau formulaire pré-rempli).', { ref: str('#0012 ou id') }, ['ref']),
 ];
 
 // ctx: { settings, tabId, emit(event) }
 export async function runTool(name, args, ctx) {
   switch (name) {
     case 'search_vinted':
-      return searchVinted(args, ctx);
+      return compactSearch(await searchVinted(args, ctx, { card: true }));
     case 'web_search':
       return webSearch(args.query, ctx.settings);
     case 'fetch_url':
       return fetchUrl(args.url);
+    case 'open_page':
+      return openPage(args, ctx);
     case 'read_page':
       return askTab(ctx, { type: 'read_page' });
     case 'analyze_photos':
@@ -128,17 +116,14 @@ export async function runTool(name, args, ctx) {
       return { ok: true, sku: item.sku, id: item.id };
     }
     case 'library_update': {
-      const item = await store.updateItem(args.ref, args.patch || {});
+      let item = Object.keys(args.patch || {}).length ? await store.updateItem(args.ref, args.patch) : await store.getItem(args.ref);
+      if (!item) throw new Error(`Article ${args.ref} introuvable`);
+      if (args.number != null) item = (await store.setItemNumber(item.id, args.number, { swap: true })).item;
       ctx.emit({ type: 'library_changed' });
       return { ok: true, item: slim(item) };
     }
-    case 'library_set_number': {
-      const r = await store.setItemNumber(args.ref, args.number, { swap: !!args.swap });
-      ctx.emit({ type: 'library_changed' });
-      return { ok: true, sku: r.item.sku, swappedWith: r.swappedWith };
-    }
     case 'library_stats':
-      return store.computeStats(await store.listItems(), ctx.settings.feePercent);
+      return store.computeStats(await store.statsItems(), ctx.settings.feePercent);
     case 'relist_item':
       return relist(args.ref, ctx.settings);
     default:
@@ -146,7 +131,7 @@ export async function runTool(name, args, ctx) {
   }
 }
 
-const slim = ({ photos, history, ...rest }) => ({ ...rest, photos: photos?.length || 0 });
+const slim = ({ photos, history, description, ...rest }) => ({ ...rest, description: (description || '').slice(0, 200), photos: photos?.length || 0 });
 
 // ---------- helpers ----------
 export async function askTab(ctx, message) {
@@ -162,17 +147,39 @@ export async function findVintedTab(settings) {
   return tabs[0]?.id ?? null;
 }
 
-export async function searchVinted(args, ctx) {
+// Full results (listing pipeline + audit). With card: true, also shows them to the seller in the chat.
+export async function searchVinted(args, ctx, { card = false } = {}) {
   const domain = ctx.settings.vintedDomain;
+  let r;
   try {
-    return trimSearch(await searchFromWorker(domain, args));
+    r = await searchFromWorker(domain, { ...args, limit: Math.min(args.limit || 30, 60) });
   } catch (e) {
     throw new Error(`Recherche Vinted impossible (${e.message}). Utilise web_search avec "site:${domain}" en secours.`);
   }
+  // Deal = priced at or under 70 % of the median of the results.
+  const median = r.stats?.median;
+  const items = r.items.map((i) => ({ ...i, deal: !!(median && i.price && i.price <= median * 0.7) }));
+  if (card) ctx.emit?.({ type: 'card', card: { kind: 'results', query: args.query, count: r.count, stats: r.stats, items: items.slice(0, 12) } });
+  return { ...r, items };
 }
 
-// Keep tool results short: the model only needs a sample, the stats carry the signal.
-const trimSearch = (r) => ({ ...r, items: r.items.slice(0, 20).map(({ photo, total, ...i }) => i) });
+// What the model sees: stats + a short sample with short keys (tokens are the bottleneck on free tiers).
+const compactSearch = (r) => ({
+  count: r.count,
+  stats: r.stats,
+  items: r.items.slice(0, 12).map((i) => ({ id: i.id, t: i.title, p: i.price, b: i.brand, s: i.size, c: i.condition, fav: i.favourites, ...(i.deal ? { deal: true } : {}) })),
+  note: 'Résultats affichés au vendeur en cartes. id → open_page(item_id).',
+});
+
+async function openPage({ item_id, search, order }, ctx) {
+  const domain = ctx.settings.vintedDomain;
+  let url;
+  if (item_id && /^\d+$/.test(String(item_id))) url = `https://${domain}/items/${item_id}`;
+  else if (search) url = `https://${domain}/catalog?${new URLSearchParams({ search_text: search, ...(order ? { order } : {}) })}`;
+  else throw new Error('item_id ou search requis');
+  await chrome.tabs.create({ url, active: true });
+  return { ok: true, opened: url };
+}
 
 export async function analyzePhotos(ctx, focus, photos) {
   const imgs = photos || (await askTab(ctx, { type: 'get_photos', max: 3 })).photos;

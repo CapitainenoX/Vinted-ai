@@ -50,6 +50,7 @@
     analyze_photos: 'Analyse des photos',
     propose_listing: "Préparation de l'annonce",
     propose_edits: 'Modifications proposées',
+    open_page: 'Ouverture de la page',
     propose_price: 'Prix proposé',
     fill_form: 'Remplissage du formulaire',
     library_search: 'Bibliothèque',
@@ -212,6 +213,7 @@
     }
 
     addCard(card) {
+      if (card.kind === 'results') return this.addResults(card);
       const rows = cardRows(card);
       const mode = this.applyMode();
       const current = mode === 'fill' ? VAI.readForm?.() || {} : {};
@@ -309,6 +311,33 @@
       // Already on the form → nothing to accept (price options stay open: the seller may still want another one).
       rows.forEach((r, i) => !(r.choices?.length > 1) && current[r.field] && sameValue(current[r.field], r.value) && settle(i, 'done', 'Déjà en place'));
       updateCount();
+      this.log.querySelector('.chat-empty')?.remove();
+      this.log.appendChild(el);
+      this.scroll();
+    }
+
+    // Vinted search results as clickable mini cards (photo, price, deal flag).
+    addResults(card) {
+      const safe = (u) => (/^https:\/\/[^\s"'<>]+$/.test(u || '') ? u : null);
+      const st = card.stats;
+      const el = document.createElement('div');
+      el.className = 'card results fade-up';
+      el.innerHTML =
+        `<div class="row-between card-head"><span class="chip accent">${icon('search', 12)} ${esc(card.query || 'Recherche')}</span><span class="small muted">${esc(card.count ?? card.items.length)} annonces</span></div>` +
+        (st ? `<p class="small muted">Prix : min <b>${esc(st.min)} €</b> · médiane <b>${esc(st.median)} €</b> · max <b>${esc(st.max)} €</b></p>` : '') +
+        `<div class="res-grid">${card.items
+          .map((i) => {
+            const url = safe(i.url);
+            const photo = safe(i.photo);
+            return `<a class="res" ${url ? `href="${esc(url)}" target="_blank" rel="noopener"` : ''} title="${esc(i.title)}">
+              ${photo ? `<img src="${esc(photo)}" alt="" loading="lazy">` : '<div class="ph"></div>'}
+              ${i.deal ? '<span class="deal">Bonne affaire</span>' : ''}
+              <span class="res-p num">${esc(i.price ?? '?')} €</span>
+              <span class="res-t">${esc(i.title || '')}</span>
+              <span class="res-m">${esc([i.brand, i.size].filter(Boolean).join(' · '))}${i.favourites ? ` · ♥ ${esc(i.favourites)}` : ''}</span>
+            </a>`;
+          })
+          .join('')}</div>`;
       this.log.querySelector('.chat-empty')?.remove();
       this.log.appendChild(el);
       this.scroll();
