@@ -52,6 +52,8 @@ export const DEFAULT_SETTINGS = {
   sellerProfile: '', // free text: style, niche, shipping habits… injected in the system prompt
   feePercent: 0, // seller fees kept for profit calc (Vinted charges buyers, so 0 by default)
   panelOpenOnForm: true,
+  // Save the form's fields to the library when the seller clicks Vinted's Add / Save button.
+  autoSaveOnPublish: true,
   // Numbers of sold/archived items go back to the pool (their bag is free again).
   skuReuseSold: true,
   // Learned Vinted member id of the seller, used to recognise "my" listings.

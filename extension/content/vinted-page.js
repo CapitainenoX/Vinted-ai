@@ -58,6 +58,31 @@
     return form;
   };
 
+  // Price → plain number "24.00": no currency sign, no thousands separator, dot decimal.
+  // Accepts "24", "24,5 €", "$19.99", "1 299,00", "EUR 30"…
+  VAI.parsePrice = (v) => {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+    const m = String(v ?? '').replace(/(\d)[\s\u00a0\u202f'.,](?=\d{3}\b)/g, '$1').match(/\d+(?:[.,]\d{1,2})?/);
+    return m ? parseFloat(m[0].replace(',', '.')) : null;
+  };
+  VAI.formatPrice = (v) => {
+    const n = VAI.parsePrice(v);
+    return n != null && n > 0 ? n.toFixed(2) : null;
+  };
+
+  // The form's filled fields, cleaned for the library (price as a number, empty fields dropped).
+  VAI.readFormData = () => {
+    const out = {};
+    for (const [k, v] of Object.entries(VAI.readForm())) {
+      if (!v) continue;
+      if (k === 'price') {
+        const n = VAI.parsePrice(v);
+        if (n != null) out.price = n;
+      } else out[k] = v;
+    }
+    return out;
+  };
+
   // React ignores .value assignments: use the native setter then fire input/change.
   function setNativeValue(el, value) {
     const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -104,7 +129,13 @@
     for (const key of ['title', 'description', 'price', 'brand', 'size', 'condition', 'color', 'material']) {
       let value = fields[key];
       if (value == null || value === '') continue;
-      if (key === 'price') value = String(value).replace('.', ',').replace(/[^\d,]/g, '');
+      if (key === 'price') {
+        value = VAI.formatPrice(value);
+        if (!value) {
+          skipped.push(`price ("${fields.price}" n'est pas un prix)`);
+          continue;
+        }
+      }
       const el = findField(key);
       if (!el) {
         skipped.push(`${key} (champ introuvable)`);

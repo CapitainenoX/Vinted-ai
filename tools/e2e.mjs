@@ -49,6 +49,7 @@ await ctx.route('https://www.vinted.fr/**', (route) => {
   const u = new URL(route.request().url());
   if (u.pathname === '/items/new') return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
   if (/^\/items\/\d+[^/]*\/edit/.test(u.pathname)) return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
+  if (u.pathname.startsWith('/items/888')) return route.fulfill({ contentType: 'text/html', body: '<meta charset="utf-8"><h1>Veste Zara en jean bleue L</h1><p>18,50 €</p>' });
   if (u.pathname.startsWith('/items/555')) return route.fulfill({ contentType: 'text/html', body: fixture('item.html') });
   if (u.pathname.startsWith('/items/777')) return route.fulfill({ contentType: 'text/html', body: fixture('item-other.html') });
   if (u.pathname.endsWith('.jpg')) return route.fulfill({ contentType: 'image/png', body: png });
@@ -77,7 +78,7 @@ await panel.locator('.result [data-act=apply]').click();
 await page.waitForFunction(() => document.getElementById('brand').dataset.picked, null, { timeout: 8000 }).catch(() => {});
 const form = await page.evaluate(() => ({ title: title.value, desc: description.value, price: price.value, brand: brand.value, react: window.reactLike }));
 check(form.title === 'Sweat à capuche Nike Club gris M' && form.react.title === form.title, 'apply → title filled (React input event fired)');
-check(form.desc.includes('#nike') && form.price === '24', 'apply → description + price filled');
+check(form.desc.includes('#nike') && form.price === '24.00', 'apply → description + price filled (format 24.00)');
 check(form.brand === 'Nike', 'apply → brand dropdown option picked');
 await panel.locator('.result [data-act=save]').click();
 await panel.locator('.apply-report .sku').waitFor();
@@ -99,7 +100,7 @@ const card = panel.locator('.proposal').last();
 check(await card.locator('.edit-row').count() >= 4, 'proposal split into per-field rows');
 await row(card, 'Prix').locator('[data-act=accept]', { hasText: 'Vendre vite' }).click();
 await row(card, 'Prix').and(card.locator('.edit-row.done')).waitFor({ timeout: 5000 });
-check((await page.evaluate(() => price.value)) === '19', 'price option "vendre vite" applied alone (19 €)');
+check((await page.evaluate(() => price.value)) === '19.00', 'price option "vendre vite" applied alone as 19.00 (no currency)');
 await row(card, 'Taille').locator('[data-act=ignore]').click();
 check(await card.locator('.edit-row.ignored').count() === 1 && (await row(card, 'Taille').getAttribute('class')).includes('ignored'), 'size ignored on its own');
 check((await row(card, 'Titre').textContent()).includes('Déjà en place'), 'title already on the form → marked "déjà en place"');
@@ -158,7 +159,7 @@ check((await acc.textContent()).includes('2 modification'), 'edit form offers th
 await acc.locator('[data-act=apply-accepted]').click();
 await acc.locator('.report', { hasText: 'Rempli' }).waitFor({ timeout: 8000 });
 const edited = await item.evaluate(() => ({ title: title.value, price: price.value }));
-check(edited.title === 'Sweat Nike Club gris M coton' && edited.price === '22', 'accepted edits applied on the edit form (ignored one skipped)');
+check(edited.title === 'Sweat Nike Club gris M coton' && edited.price === '22.00', 'accepted edits applied on the edit form (ignored one skipped)');
 
 // someone else's listing → competitor menu
 const other = await ctx.newPage();
@@ -223,6 +224,26 @@ await dash.emulateMedia({ colorScheme: 'dark' });
 await dash.goto(`chrome-extension://${id}/dashboard/dashboard.html#overview`);
 await dash.locator('.kpi').first().waitFor();
 await dash.screenshot({ path: `${shots}/7-overview-dark.png` });
+
+// 5. Seller fills the Vinted form by hand and clicks "Ajouter" → saved to the library, then linked to the new listing
+const sell = await ctx.newPage();
+sell.on('pageerror', (e) => errors.push(e.message + ' @ ' + e.stack));
+await sell.goto('https://www.vinted.fr/items/new');
+await sell.locator('#vinted-ai-root .panel.open').waitFor({ timeout: 8000 });
+await sell.fill('#title', 'Veste Zara en jean bleue L');
+await sell.fill('#description', 'Veste en jean Zara, portée 3 fois.');
+await sell.fill('#price', '18,50 €');
+await sell.click('#publish');
+const toastEl = sell.locator('#vinted-ai-root .toast');
+await toastEl.waitFor({ state: 'visible', timeout: 8000 });
+const toastText = await toastEl.textContent();
+check(/Ajouté dans ta bibliothèque #\d{4}/.test(toastText), `"Ajouter" on Vinted saves the form (${toastText.trim()})`);
+await sell.waitForURL('**/items/888-veste-zara');
+await toastEl.filter({ hasText: 'Annonce liée' }).waitFor({ timeout: 8000 });
+const saved = await sw.evaluate(async () => (await chrome.storage.local.get('library')).library.find((i) => i.title === 'Veste Zara en jean bleue L'));
+check(saved?.price === 18.5 && saved.description.includes('portée 3 fois') && saved.status === 'listed', 'saved item has the form fields (title, description, price 18.5)');
+check(saved?.vintedId === '888' && saved.vintedUrl.endsWith('/items/888'), 'saved item linked to the new Vinted listing (#888)');
+await sell.screenshot({ path: `${shots}/8-saved-toast.png` });
 
 check(errors.length === 0, `no page errors ${errors.length ? JSON.stringify(errors) : ''}`);
 await ctx.close();

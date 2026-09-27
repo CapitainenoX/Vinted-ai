@@ -99,3 +99,10 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 .sku-msg { margin: 6px 0 0; color: var(--warn); }
 .sku-msg .btn { margin-top: 4px; }
 .item-edit .sku-host { padding-top: 10px; }
+
+.toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 12px); opacity: 0; max-width: min(420px, calc(100vw - 32px));
+  display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--r-md); background: var(--text); color: var(--bg);
+  font: 500 13px/1.4 var(--font); box-shadow: var(--shadow-lg); transition: opacity var(--t-fast) var(--ease-out), transform var(--t-fast) var(--ease-out); z-index: 2; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast .sku { color: inherit; }
+@media (prefers-reduced-motion: reduce) { .toast { transition: none; } }

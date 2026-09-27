@@ -34,7 +34,8 @@
       <section class="view" data-view="listing"></section>
       <section class="view" data-view="chat"></section>
       <section class="view" data-view="library"></section>
-    </aside>`;
+    </aside>
+    <div class="toast" role="status" hidden></div>`;
   document.documentElement.appendChild(host);
 
   const $ = (s) => root.querySelector(s);
@@ -326,7 +327,8 @@
       });
     out.querySelector('[data-act=save]').onclick = (e) =>
       busy(e.currentTarget, async () => {
-        const item = await send('library:create', { data: { ...read(), photos: await VAI.getPhotos(4, 320) } });
+        // What's really on the Vinted form wins over the generated text (the seller may have edited it).
+        const item = await send('library:create', { data: { ...read(), ...VAI.readFormData(), photos: await VAI.getPhotos(4, 320) } });
         const report = out.querySelector('.apply-report');
         if (report) report.innerHTML = `${icon('check', 12)} Sauvé <span class="sku">${esc(item.sku)}</span> — note ce numéro sur le sachet de l'article.`;
       });
@@ -606,6 +608,93 @@
     VAI.detectOwnership().then((o) => (ownership ??= o)).catch(() => {});
   }
 
+  let toastTimer = null;
+  function toast(html) {
+    const t = $('.toast');
+    t.innerHTML = html;
+    t.hidden = false;
+    requestAnimationFrame(() => t.classList.add('show'));
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      t.classList.remove('show');
+      setTimeout(() => (t.hidden = true), 250);
+    }, 4000);
+  }
+
+  // ---------- save to the library when the seller saves the form on Vinted ----------
+  // Vinted's buttons: "Ajouter" (new), "Enregistrer (les modifications)" (edit), "Enregistrer le brouillon"… fr/en + a few locales.
+  const SAVE_BTN = /^(ajouter|publier|mettre en vente|enregistrer|sauvegarder|valider|upload|add|publish|save|list( item)?|hinzufügen|speichern|subir|guardar|pubblica|carica|salva)\b/i;
+  const NOT_SAVE = /photo|image|vid[eé]o|marque|brand|taille|size|couleur|colou?r|mati[eè]re|cat[ée]gorie|favori|panier|lot|filtre|recherch|search/i;
+  const DRAFT_BTN = /brouillon|draft|entwurf|borrador|bozza/i;
+  // sessionStorage survives Vinted's redirect to the new listing (same tab, same origin).
+  // Every save on the same form updates the same library item; the link to the new listing is made within 2 min.
+  const CAPTURE_KEY = 'vai-captured';
+  const readCaptured = () => {
+    try {
+      return JSON.parse(sessionStorage.getItem(CAPTURE_KEY) || 'null');
+    } catch {
+      return null;
+    }
+  };
+  const writeCaptured = (c) => {
+    try {
+      sessionStorage.setItem(CAPTURE_KEY, JSON.stringify(c));
+    } catch {}
+  };
+  let lastCapture = 0;
+
+  async function captureForm(draft) {
+    if (VAI.pageType() !== 'form' || Date.now() - lastCapture < 1500) return;
+    const form = VAI.readFormData(); // read now, before Vinted resets or leaves the form
+    if (!form.title) return; // nothing worth saving (or fields not found)
+    lastCapture = Date.now();
+    const settings = await send('settings:get').catch(() => null);
+    if (settings && settings.autoSaveOnPublish === false) return;
+    const editId = VAI.currentItemId();
+    const prev = readCaptured();
+    const data = {
+      ...form,
+      status: draft ? 'draft' : 'listed',
+      ...(editId ? { vintedId: editId, vintedUrl: `${location.origin}/items/${editId}` } : {}),
+    };
+    const itemId = (prev?.path === location.pathname && prev.itemId) || pendingItem?.id || null;
+    const { item, created } = await send('library:captureForm', { data, itemId });
+    writeCaptured({ itemId: item.id, at: Date.now(), path: location.pathname, linked: !!editId || draft });
+    toast(`${icon('check', 14)} ${created ? 'Ajouté' : 'Mis à jour'} dans ta bibliothèque <span class="sku">${esc(item.sku)}</span>${created ? ' — note ce numéro sur le sachet.' : ''}`);
+    // Photos last: the page may already be navigating away.
+    const photos = await VAI.getPhotos(4, 320).catch(() => []);
+    if (photos.length) send('library:update', { ref: item.id, patch: { photos } }).catch(() => {});
+  }
+
+  // Capture phase: runs before Vinted's own handler clears or leaves the form.
+  document.addEventListener(
+    'click',
+    (e) => {
+      if (VAI.pageType() !== 'form' || e.composedPath().includes(host)) return;
+      const btn = e.target.closest?.('button, [role="button"], input[type="submit"]');
+      if (!btn) return;
+      if (btn.closest('header, nav, [role="search"], [role="dialog"], [role="listbox"]')) return; // search bar, dropdowns, modals
+      const label = (btn.textContent || btn.value || btn.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim();
+      const testid = btn.getAttribute('data-testid') || '';
+      if (label.length > 40 || NOT_SAVE.test(label + ' ' + testid)) return;
+      if (SAVE_BTN.test(label) || /save|submit|upload-form|publish/i.test(testid)) captureForm(DRAFT_BTN.test(label + ' ' + testid)).catch(() => {});
+    },
+    true,
+  );
+
+  // After "Ajouter", Vinted opens the new listing: attach its id to the saved item.
+  async function linkCapturedListing() {
+    const c = readCaptured();
+    const id = VAI.currentItemId();
+    if (!c || c.linked || Date.now() - c.at > 120000 || VAI.pageType() !== 'item' || !id) return;
+    writeCaptured({ ...c, linked: true });
+    const item = await send('library:update', { ref: c.itemId, patch: { vintedId: id, vintedUrl: `${location.origin}/items/${id}`, status: 'listed' } }).catch(() => null);
+    if (item) {
+      toast(`${icon('link', 14)} Annonce liée à <span class="sku">${esc(item.sku)}</span>`);
+      VAI.refreshIndex?.();
+    }
+  }
+
   // ---------- page-aware boot ----------
   function updatePageChip() {
     $('.page-chip').textContent = PAGE_LABEL[VAI.pageType()];
@@ -620,6 +709,7 @@
       if (pendingItem || accepted || settings?.panelOpenOnForm) open('listing');
     }
     detectOwnershipQuietly();
+    linkCapturedListing();
   }
   boot();
 
@@ -632,6 +722,7 @@
     extraPhotos = [];
     ownership = null;
     detectOwnershipQuietly();
+    linkCapturedListing();
     updatePageChip();
     if (panel.classList.contains('open') && current !== 'chat') show(current);
   }, 800);

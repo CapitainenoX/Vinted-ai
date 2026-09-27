@@ -34,6 +34,19 @@ const handlers = {
     }
   },
   'library:nextNumber': async () => store.formatSku(store.nextFreeNumber(await store.listItems(), (await store.getSettings()).skuReuseSold)),
+  // Vinted form saved/published: update the matching library item (same capture, relisted item, or vintedId), else create one.
+  // Seller-owned fields (notes, cost, location, status once sold) are never overwritten.
+  'library:captureForm': async ({ data, itemId }) => {
+    const items = await store.listItems();
+    const existing = items.find((i) => i.id === itemId) || (data.vintedId && items.find((i) => String(i.vintedId) === String(data.vintedId))) || null;
+    if (existing) {
+      const patch = { ...data };
+      if (existing.status === 'sold' || existing.status === 'archived') delete patch.status;
+      if (!patch.photos?.length) delete patch.photos;
+      return { item: await store.updateItem(existing.id, patch), created: false };
+    }
+    return { item: await store.createItem(data), created: true };
+  },
   'library:export': () => store.exportAll(),
   'library:import': ({ data }) => store.importAll(data),
   'library:stats': async () => store.computeStats(await store.listItems(), (await store.getSettings()).feePercent),

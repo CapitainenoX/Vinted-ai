@@ -292,7 +292,8 @@
         const btn = e.currentTarget;
         btn.disabled = true;
         const { kind, ...listing } = card;
-        const item = await VAI.send('library:create', { data: { ...listing, photos: (await VAI.currentThumbs?.()) || [] } });
+        const form = VAI.pageType?.() === 'form' ? VAI.readFormData?.() || {} : {};
+        const item = await VAI.send('library:create', { data: { ...listing, ...form, photos: (await VAI.currentThumbs?.()) || [] } });
         btn.innerHTML = `${icon('check', 14)} Sauvé ${esc(item.sku)}`;
       });
       el.querySelector('[data-act=copy]')?.addEventListener('click', (e) => {

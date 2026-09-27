@@ -7,6 +7,7 @@
   <label for="brand">Marque</label><input id="brand" name="brand" autocomplete="off">
   <ul role="listbox" id="brand-list" hidden><li role="option">Adidas</li><li role="option">Nike</li><li role="option">Nike ACG</li></ul><br>
   <label for="price">Prix</label><input id="price" name="price"><br>
+  <button type="button" data-testid="upload-form-save-button" id="publish">Ajouter</button>
 </form>
 <script>
   // Fake photo: a canvas-drawn JPEG exposed as a blob: URL, like Vinted's uploader preview.
@@ -16,5 +17,7 @@
   const brand = document.getElementById('brand'), list = document.getElementById('brand-list');
   brand.addEventListener('click', () => (list.hidden = false));
   list.querySelectorAll('li').forEach((li) => li.addEventListener('click', () => { brand.value = li.textContent; brand.dataset.picked = li.textContent; list.hidden = true; }));
+  // Like Vinted: publishing opens the new listing.
+  document.getElementById('publish').addEventListener('click', () => setTimeout(() => (location.href = '/items/888-veste-zara'), 300));
   window.reactLike = {}; ['title','description','price'].forEach((id) => document.getElementById(id).addEventListener('input', (e) => (window.reactLike[id] = e.target.value)));
 </script></body></html>
