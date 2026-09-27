@@ -21,7 +21,6 @@
       <header>
         <div class="brand">${icon('sparkles', 16)}<span>Vinted AI</span><span class="chip page-chip"></span></div>
         <div class="head-actions">
-          <button class="icon-btn" data-act="clear" title="Nouvelle conversation">${icon('refresh')}</button>
           <button class="icon-btn" data-act="dashboard" title="Ouvrir le dashboard">${icon('chart')}</button>
           <button class="icon-btn" data-act="close" title="Fermer (Échap)">${icon('x')}</button>
         </div>
@@ -68,7 +67,6 @@
   root.querySelectorAll('[role=tab]').forEach((b) => (b.onclick = () => show(b.dataset.tab)));
   $('[data-act=close]').onclick = close;
   $('[data-act=dashboard]').onclick = () => send('dashboard:open', {});
-  $('[data-act=clear]').onclick = () => chat?.clear();
   document.addEventListener('keydown', (e) => {
     if (e.altKey && e.code === 'KeyV') panel.classList.contains('open') ? close() : open();
     if (e.key === 'Escape' && panel.classList.contains('open') && e.composedPath().includes(host)) close();

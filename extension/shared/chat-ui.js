@@ -100,6 +100,10 @@
     render() {
       this.root.innerHTML = `
         <div class="chat">
+          <div class="chat-bar">
+            <span class="small muted chat-status" aria-live="polite"></span>
+            <button class="btn sm ghost" data-act="new" title="Efface l'historique : l'agent repart de zéro (plus rapide, moins de limites)">${icon('plus', 12)} Nouvelle conversation</button>
+          </div>
           <div class="chat-log" role="log" aria-live="polite"></div>
           <div class="chat-input">
             <div class="thumbs"></div>
@@ -118,6 +122,8 @@
       this.thumbs = this.root.querySelector('.thumbs');
 
       this.sendBtn.onclick = () => (this.busy ? this.stop() : this.submit());
+      this.statusEl = this.root.querySelector('.chat-status');
+      this.root.querySelector('[data-act=new]').onclick = () => this.clear();
       this.root.querySelector('[data-act=attach]').onclick = () => this.file.click();
       this.file.onchange = () => this.addFiles([...this.file.files]).then(() => (this.file.value = ''));
       this.ta.addEventListener('keydown', (e) => {
@@ -322,7 +328,19 @@
       this.port?.postMessage({ type: 'stop' });
     }
 
+    setStatus(text) {
+      this.statusEl.textContent = text || '';
+    }
+
     async clear() {
+      if (this.busy) {
+        const port = this.port;
+        this.port = null;
+        port?.postMessage({ type: 'stop' });
+        port?.disconnect();
+        this.setBusy(false);
+      }
+      this.setStatus('');
       await VAI.send('chat:clear', { id: this.chatId });
       this.log.innerHTML = '';
       this.renderEmpty();
@@ -340,9 +358,15 @@
       this.setBusy(true);
 
       let pending = null;
+      let finished = false;
       const port = (this.port = chrome.runtime.connect({ name: 'chat' }));
+      this.setStatus('L’agent réfléchit…');
       port.onMessage.addListener((e) => {
-        if (e.type === 'tool') pending = this.addToolLine(e.name, e.args);
+        if (e.type === 'status') return this.setStatus(e.text);
+        if (e.type === 'tool') {
+          pending = this.addToolLine(e.name, e.args);
+          this.setStatus('L’agent utilise ses outils…');
+        }
         else if (e.type === 'tool_result' && pending) {
           pending.querySelector('.spinner').outerHTML = e.error ? icon('x', 12) : icon('check', 12);
           if (e.error) pending.classList.add('err');
@@ -353,11 +377,22 @@
         else if (e.type === 'final') this.addMessage('assistant', e.text);
         else if (e.type === 'error') this.addMessage('error', e.error);
         else if (e.type === 'done') {
+          finished = true;
           this.setBusy(false);
+          this.setStatus('');
           port.disconnect();
         }
       });
-      port.onDisconnect.addListener(() => this.setBusy(false));
+      // Worker restarted / extension reloaded mid-answer: say so instead of spinning forever.
+      port.onDisconnect.addListener(() => {
+        if (this.port !== port) return; // replaced by "Nouvelle conversation"
+        if (!finished) {
+          pending?.querySelector('.spinner')?.remove();
+          this.addMessage('error', 'Connexion à l’agent perdue. Renvoie ton message (ou recharge la page si l’extension a été mise à jour).');
+        }
+        this.setBusy(false);
+        this.setStatus('');
+      });
       port.postMessage({
         type: 'send',
         chatId: this.chatId,

@@ -300,7 +300,6 @@ function renderAgent() {
     chatId: 'dashboard',
     suggestions: ['Analyse mes ventes et donne 3 actions', 'Quels articles relancer cette semaine ?', 'Prix du marché pour un jean Levi\'s 501 W32', 'Tendances vintage qui se vendent en ce moment'],
   });
-  $('#chat-clear').onclick = () => chat.clear();
 }
 
 // ---------- settings ----------

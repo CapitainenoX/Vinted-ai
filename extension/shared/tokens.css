@@ -124,6 +124,9 @@
 .thumb { position: relative; width: 44px; height: 44px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .thumb button { position: absolute; top: 1px; right: 1px; width: 16px; height: 16px; border-radius: 50%; border: 0; background: rgb(0 0 0 / .6); color: #fff; cursor: pointer; font-size: 11px; line-height: 16px; padding: 0; }
+.chat-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--surface); min-height: 38px; }
+.chat-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-bar .btn { flex-shrink: 0; }
 .proposal { align-self: stretch; }
 .proposal .field { margin-bottom: 8px; }
 .proposal .field b { display: block; font: 600 11px/1.2 var(--font); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }

@@ -104,6 +104,17 @@ check((await page.evaluate(() => price.value)) === '19.00', 'price option "vendr
 await row(card, 'Taille').locator('[data-act=ignore]').click();
 check(await card.locator('.edit-row.ignored').count() === 1 && (await row(card, 'Taille').getAttribute('class')).includes('ignored'), 'size ignored on its own');
 check((await row(card, 'Titre').textContent()).includes('Déjà en place'), 'title already on the form → marked "déjà en place"');
+// a model stuck in a tool loop still ends with a real answer, and repeated calls are not re-run
+await panel.locator('.chat textarea').fill('Boucle sur les outils');
+await panel.locator('.chat textarea').press('Enter');
+await panel.locator('.msg.assistant', { hasText: 'Réponse finale après les outils' }).waitFor({ timeout: 30000 });
+check(true, 'tool loop → forced final answer (no endless spinner)');
+check(await panel.locator('.tool-line', { hasText: 'déjà fait' }).count() >= 1, 'identical tool call reused, not re-run');
+check((await panel.locator('.chat-status').textContent()) === '', 'status line cleared when done');
+// "Nouvelle conversation"
+await panel.locator('.chat [data-act=new]').click();
+await panel.locator('.chat-empty').waitFor({ timeout: 5000 });
+check(await panel.locator('.msg').count() === 0 && (await sw.evaluate(async () => (await chrome.storage.local.get('chats')).chats.panel.length)) === 0, '"Nouvelle conversation" clears the chat and its history');
 await page.screenshot({ path: `${shots}/2-chat.png` });
 
 // 3. Item page: link to library + SKU badge

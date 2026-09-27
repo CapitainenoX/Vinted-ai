@@ -27,7 +27,9 @@ http.createServer((req, res) => {
     else if (b.tools) {
       const toolMsgs = b.messages.filter((m) => m.role === 'tool').length;
       const ask = b.messages.filter((m) => m.role === 'user').at(-1).content;
-      if (ask.includes('Optimise')) {
+      if (ask.includes('Boucle')) {
+        out = reply(call('search_vinted', { query: 'boucle' })); // a model that never stops calling tools
+      } else if (ask.includes('Optimise')) {
         out = toolMsgs
           ? reply({ role: 'assistant', content: '3 modifications proposées : accepte celles qui te conviennent.' })
           : reply(call('propose_edits', { summary: 'Titre plus cherché, prix dans la médiane.', edits: [
@@ -38,7 +40,8 @@ http.createServer((req, res) => {
       } else if (last.role === 'user') out = reply(call('search_vinted', { query: 'sweat nike club' }));
       else if (toolMsgs === 1) out = reply(call('propose_listing', { title: listing.title, description: listing.description, price: 24, price_fast: 19, price_max: 29, price_reasoning: 'Médiane 25 € sur 3 annonces', brand: 'Nike', size: 'M' }));
       else out = reply({ role: 'assistant', content: '## Prix conseillé\n- **24 €** (médiane du marché)\n- Rapide : 19 €' });
-    } else out = reply({ role: 'assistant', content: 'OK' });
+    } else if (text.includes('Réponds maintenant')) out = reply({ role: 'assistant', content: 'Réponse finale après les outils.' });
+    else out = reply({ role: 'assistant', content: 'OK' });
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify(out));
   });

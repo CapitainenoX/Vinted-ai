@@ -6,7 +6,10 @@ import { agentSystemPrompt, listingPrompt, auditPrompt } from './lib/prompts.js'
 import { TOOL_DEFS, runTool, searchVinted, analyzePhotos, askTab } from './lib/tools.js';
 
 const MAX_STEPS = 8;
-const TOOL_RESULT_CHARS = 7000;
+const TOOL_RESULT_CHARS = 4000; // latest tool results
+const OLD_TOOL_CHARS = 1200; // earlier tool results in the same turn (free tiers count every token again at each step)
+const HISTORY_MESSAGES = 16; // past messages sent to the model
+const TOOL_TIMEOUT_MS = { analyze_photos: 90000, default: 30000 };
 
 // ---------- one-shot messages ----------
 const handlers = {
@@ -111,7 +114,10 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener(async (msg) => {
     if (msg.type === 'stop') return controller?.abort();
     if (msg.type !== 'send') return;
+    controller?.abort(); // a new message replaces a run still going
     controller = new AbortController();
+    // MV3 stops an idle worker after ~30 s: an extension API call every 20 s keeps it alive during long LLM waits.
+    const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20000);
     const emit = (e) => {
       try {
         port.postMessage(e);
@@ -122,6 +128,7 @@ chrome.runtime.onConnect.addListener((port) => {
     } catch (e) {
       emit({ type: 'error', error: e.name === 'AbortError' ? 'Arrêté.' : e.message });
     } finally {
+      clearInterval(keepAlive);
       emit({ type: 'done' });
     }
   });
@@ -134,36 +141,66 @@ async function runAgent({ chatId, text, images = [], pageContext }, { tabId, emi
   const cards = [];
   const ctx = { settings, tabId, emit: (e) => (e.type === 'card' && cards.push(e.card), emit(e)) };
   const history = await store.getChat(chatId);
+  const status = (t) => emit({ type: 'status', text: t });
 
   let userContent = text;
   if (images.length) {
     emit({ type: 'tool', name: 'analyze_photos', args: { photos: images.length } });
-    const vision = await analyzePhotos(ctx, null, images);
-    emit({ type: 'tool_result', name: 'analyze_photos', summary: summarize('analyze_photos', vision) });
-    userContent += `\n\n[Analyse des ${images.length} photo(s) jointe(s)]\n${JSON.stringify(vision)}`;
+    try {
+      const vision = await withTimeout(analyzePhotos(ctx, null, images), TOOL_TIMEOUT_MS.analyze_photos, 'analyze_photos');
+      emit({ type: 'tool_result', name: 'analyze_photos', summary: summarize('analyze_photos', vision) });
+      userContent += `\n\n[Analyse des ${images.length} photo(s) jointe(s)]\n${JSON.stringify(vision)}`;
+    } catch (e) {
+      emit({ type: 'tool_result', name: 'analyze_photos', summary: '⚠ ' + e.message, error: true });
+      userContent += `\n\n[${images.length} photo(s) jointe(s), analyse impossible : ${e.message}]`;
+    }
   }
 
   const messages = [
     { role: 'system', content: agentSystemPrompt(settings, { page: pageContext }) },
-    ...history.map(({ role, content }) => ({ role, content })),
+    ...history.slice(-HISTORY_MESSAGES).map(({ role, content }) => ({ role, content: String(content || '').slice(0, 4000) })),
     { role: 'user', content: userContent },
   ];
   history.push({ role: 'user', content: userContent, display: text, images: images.length });
 
+  const llm = (opts) => chatCompletion(settings, { model: settings.chatModel, messages, signal, temperature: 0.4, onRetry: status, ...opts });
+  const finish = async (answer) => {
+    history.push({ role: 'assistant', content: answer, ...(cards.length ? { cards } : {}) });
+    await store.saveChat(chatId, history);
+    emit({ type: 'final', text: answer });
+  };
+  // Last word without tools: always end on a real answer built from what the tools returned.
+  const forceAnswer = async (why) => {
+    status('Rédaction de la réponse…');
+    messages.push({ role: 'user', content: `${why} Réponds maintenant au vendeur avec les informations déjà obtenues, sans appeler d'outil.` });
+    const { message } = await llm({});
+    return message.content?.trim() || "Je n'ai pas réussi à formuler de réponse. Reformule ta demande ou démarre une nouvelle conversation.";
+  };
+
+  const seen = new Map(); // identical tool calls in one turn → reuse the first result (stops loops)
   for (let step = 0; step < MAX_STEPS; step++) {
-    const { message } = await chatCompletion(settings, { model: settings.chatModel, messages, tools: TOOL_DEFS, signal, temperature: 0.4 });
+    let message;
+    try {
+      ({ message } = await llm({ tools: TOOL_DEFS }));
+    } catch (e) {
+      if (e.code !== 'TOO_LARGE') throw e;
+      // Too much context: keep the system prompt + this turn only, with short tool results, and try once more.
+      status('Conversation trop longue : je résume et je réessaie…');
+      const start = messages.findLastIndex((m) => m.role === 'user' && m.content === userContent);
+      messages.splice(1, Math.max(0, start - 1));
+      shrinkToolResults(messages, 0, 600);
+      ({ message } = await llm({ tools: TOOL_DEFS }));
+    }
     const calls = message.tool_calls || [];
     messages.push({ role: 'assistant', content: message.content || '', ...(calls.length ? { tool_calls: calls } : {}) });
 
     if (!calls.length) {
-      const answer = message.content?.trim() || '(pas de réponse)';
-      history.push({ role: 'assistant', content: answer, ...(cards.length ? { cards } : {}) });
-      await store.saveChat(chatId, history);
-      emit({ type: 'final', text: answer });
-      return;
+      const answer = message.content?.trim();
+      return finish(answer || (await forceAnswer('Ta dernière réponse était vide.')));
     }
     if (message.content) emit({ type: 'thinking', text: message.content });
 
+    shrinkToolResults(messages, messages.length - 1, OLD_TOOL_CHARS);
     for (const call of calls) {
       const name = call.function?.name;
       let args = {};
@@ -171,23 +208,44 @@ async function runAgent({ chatId, text, images = [], pageContext }, { tabId, emi
         args = JSON.parse(call.function?.arguments || '{}') || {};
       } catch {}
       emit({ type: 'tool', name, args });
+      const key = name + JSON.stringify(args);
       let result;
       try {
-        result = await runTool(name, args, ctx);
-        emit({ type: 'tool_result', name, summary: summarize(name, result) });
+        if (seen.has(key)) {
+          result = { note: 'Outil déjà appelé avec ces arguments : utilise le résultat précédent, ne le rappelle pas.' };
+          emit({ type: 'tool_result', name, summary: 'déjà fait' });
+        } else {
+          result = await withTimeout(runTool(name, args, ctx), TOOL_TIMEOUT_MS[name] || TOOL_TIMEOUT_MS.default, name);
+          seen.set(key, true);
+          emit({ type: 'tool_result', name, summary: summarize(name, result) });
+        }
       } catch (e) {
+        if (signal.aborted) throw e;
         result = { error: e.message };
         emit({ type: 'tool_result', name, summary: '⚠ ' + e.message, error: true });
       }
-      let content = JSON.stringify(result);
+      let content = JSON.stringify(result) ?? 'null';
       if (content.length > TOOL_RESULT_CHARS) content = content.slice(0, TOOL_RESULT_CHARS) + '…(tronqué)';
       messages.push({ role: 'tool', tool_call_id: call.id, content });
     }
   }
-  const msg = "J'ai atteint la limite d'étapes. Reformule ou découpe la demande.";
-  history.push({ role: 'assistant', content: msg, ...(cards.length ? { cards } : {}) });
-  await store.saveChat(chatId, history);
-  emit({ type: 'final', text: msg });
+  return finish(await forceAnswer("Tu as utilisé toutes tes étapes d'outils."));
+}
+
+// Tool results older than `before` are cut down: the model already used them, re-sending them costs tokens.
+function shrinkToolResults(messages, before, max) {
+  for (let i = 0; i < before; i++) {
+    const m = messages[i];
+    if (m.role === 'tool' && m.content.length > max) m.content = m.content.slice(0, max) + '…(résumé)';
+  }
+}
+
+function withTimeout(promise, ms, name) {
+  let t;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => (t = setTimeout(() => reject(new Error(`${name} : pas de réponse après ${ms / 1000} s`)), ms))),
+  ]).finally(() => clearTimeout(t));
 }
 
 function summarize(name, r) {
