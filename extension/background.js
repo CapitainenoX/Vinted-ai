@@ -117,7 +117,9 @@ chrome.runtime.onConnect.addListener((port) => {
 
 async function runAgent({ chatId, text, images = [], pageContext }, { tabId, emit, signal }) {
   const settings = await store.getSettings();
-  const ctx = { settings, tabId, emit };
+  // Keep the cards (listing / edits / price) with the answer so they survive a panel reload.
+  const cards = [];
+  const ctx = { settings, tabId, emit: (e) => (e.type === 'card' && cards.push(e.card), emit(e)) };
   const history = await store.getChat(chatId);
 
   let userContent = text;
@@ -142,7 +144,7 @@ async function runAgent({ chatId, text, images = [], pageContext }, { tabId, emi
 
     if (!calls.length) {
       const answer = message.content?.trim() || '(pas de réponse)';
-      history.push({ role: 'assistant', content: answer });
+      history.push({ role: 'assistant', content: answer, ...(cards.length ? { cards } : {}) });
       await store.saveChat(chatId, history);
       emit({ type: 'final', text: answer });
       return;
@@ -170,7 +172,7 @@ async function runAgent({ chatId, text, images = [], pageContext }, { tabId, emi
     }
   }
   const msg = "J'ai atteint la limite d'étapes. Reformule ou découpe la demande.";
-  history.push({ role: 'assistant', content: msg });
+  history.push({ role: 'assistant', content: msg, ...(cards.length ? { cards } : {}) });
   await store.saveChat(chatId, history);
   emit({ type: 'final', text: msg });
 }
@@ -190,6 +192,8 @@ function summarize(name, r) {
       return `ajouté ${r.sku}`;
     case 'read_page':
       return r.pageType || 'lu';
+    case 'propose_edits':
+      return `${r.note?.match(/^\d+/)?.[0] || ''} modification(s) proposée(s)`;
     case 'fill_form':
       return r.filled ? `${r.filled.length} champ(s) rempli(s)` : 'ok';
     default:

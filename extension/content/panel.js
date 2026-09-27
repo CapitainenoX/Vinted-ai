@@ -103,6 +103,71 @@
   }
   VAI.applyListing = (listing) => VAI.fillForm(listing);
 
+  // ---------- agent edits, accepted one by one ----------
+  // On the form: applied straight away. On my own item page: queued per item, applied on its edit form.
+  const FILLABLE = ['title', 'description', 'price', 'brand', 'size', 'condition', 'color', 'material'];
+  const EDIT_LABELS = { title: 'titre', description: 'description', price: 'prix', brand: 'marque', size: 'taille', condition: 'état', color: 'couleur', material: 'matière' };
+  VAI.applyMode = () => (VAI.pageType() === 'form' ? 'fill' : VAI.pageType() === 'item' && ownership?.own ? 'queue' : null);
+  VAI.applyEdit = async (field, value) => {
+    if (!FILLABLE.includes(field)) return null; // e.g. category: copied, chosen by hand
+    const mode = VAI.applyMode();
+    if (mode === 'fill') {
+      const r = await VAI.fillForm({ [field]: value });
+      return r.filled.length ? { status: 'applied' } : { status: 'failed', message: r.skipped[0] || 'Champ introuvable' };
+    }
+    if (mode === 'queue') {
+      const id = VAI.currentItemId();
+      const all = await getAccepted();
+      all[id] = { fields: { ...(all[id]?.fields || {}), [field]: value }, at: Date.now() };
+      await chrome.storage.local.set({ acceptedEdits: all });
+      drawAccepted(root.querySelector('.accepted-edits'));
+      return { status: 'queued' };
+    }
+    return null;
+  };
+  const getAccepted = async () => {
+    const { acceptedEdits = {} } = await chrome.storage.local.get('acceptedEdits');
+    // Drop anything older than 7 days.
+    for (const [k, v] of Object.entries(acceptedEdits)) if (Date.now() - v.at > 7 * 864e5) delete acceptedEdits[k];
+    return acceptedEdits;
+  };
+  const clearAccepted = async (id) => {
+    const all = await getAccepted();
+    delete all[id];
+    await chrome.storage.local.set({ acceptedEdits: all });
+  };
+
+  // Item page: "N modifications acceptées → Modifier sur Vinted". Edit form: "Appliquer les N modifications".
+  async function drawAccepted(el) {
+    if (!el) return;
+    const id = VAI.currentItemId();
+    const fields = (await getAccepted())[id]?.fields;
+    const keys = Object.keys(fields || {});
+    if (!keys.length) return (el.innerHTML = '');
+    const list = keys.map((k) => EDIT_LABELS[k] || k).join(', ');
+    if (VAI.pageType() === 'form') {
+      el.innerHTML = `<div class="card accent-card fade-up">
+        <strong>${keys.length} modification(s) acceptée(s) dans l'agent</strong>
+        <p class="small">${esc(list)}</p>
+        <div class="actions"><button class="btn primary sm" data-act="apply-accepted">${icon('wand', 12)} Appliquer au formulaire</button>
+        <button class="btn sm ghost" data-act="drop-accepted">Oublier</button></div><p class="small muted report"></p></div>`;
+      el.querySelector('[data-act=drop-accepted]').onclick = async () => (await clearAccepted(id), (el.innerHTML = ''));
+      el.querySelector('[data-act=apply-accepted]').onclick = (e) =>
+        busy(e.currentTarget, async () => {
+          const r = await VAI.fillForm(fields);
+          await clearAccepted(id);
+          el.querySelector('.report').textContent = `Rempli : ${r.filled.map((k) => EDIT_LABELS[k] || k).join(', ') || 'rien'}${r.skipped.length ? ' · À faire : ' + r.skipped.join(', ') : ''}. Vérifie puis enregistre sur Vinted.`;
+        });
+    } else {
+      el.innerHTML = `<div class="card accent-card fade-up">
+        <strong>${keys.length} modification(s) acceptée(s)</strong>
+        <p class="small">${esc(list)} — elles seront appliquées sur le formulaire de modification.</p>
+        <div class="actions"><a class="btn primary sm" href="${esc(location.origin)}/items/${esc(id)}/edit">${icon('external', 12)} Modifier sur Vinted</a>
+        <button class="btn sm ghost" data-act="drop-accepted">Oublier</button></div></div>`;
+      el.querySelector('[data-act=drop-accepted]').onclick = async () => (await clearAccepted(id), (el.innerHTML = ''));
+    }
+  }
+
   // ---------- listing tab ----------
   let lastResult = null;
   let extraPhotos = [];
@@ -121,6 +186,7 @@
       return;
     }
     view.innerHTML = `<div class="pad">
+      <div class="accepted-edits"></div>
       <div class="pending"></div>
       <div class="card">
         <div class="row-between"><strong>Photos de l'annonce</strong><button class="btn sm ghost" data-act="rescan">${icon('refresh', 12)} Rescanner</button></div>
@@ -173,6 +239,7 @@
     view.querySelector('[data-act=audit]').onclick = (e) => audit(e.currentTarget, view);
     if (lastResult) drawResult(view.querySelector('.result'), lastResult);
     renderPending(view.querySelector('.pending'));
+    drawAccepted(view.querySelector('.accepted-edits'));
   }
 
   async function busy(btn, fn) {
@@ -419,8 +486,9 @@
         <div class="actions"><button class="btn sm" data-act="bought">${icon('plus', 12)} Ajouter comme achat</button><span class="small muted bought-msg"></span></div>
       </div>`;
 
-    view.innerHTML = `<div class="pad stack">${ownerBar}${own ? mine + myTools : theirTools}<div class="result"></div></div>`;
+    view.innerHTML = `<div class="pad stack">${ownerBar}${own ? '<div class="accepted-edits"></div>' + mine + myTools : theirTools}<div class="result"></div></div>`;
     if (linked && own) numberEditor(view.querySelector('.sku-host'), linked);
+    if (own) drawAccepted(view.querySelector('.accepted-edits'));
 
     const rerender = () => renderItemPage(view);
     view.querySelector('[data-act=flip]').onclick = async () => {
@@ -532,6 +600,12 @@
     edit.querySelector('[data-act=fill]')?.addEventListener('click', () => VAI.fillForm(item));
   }
 
+  // The agent's apply buttons need to know whether this item is mine, even if the Annonce tab was never opened.
+  function detectOwnershipQuietly() {
+    if (VAI.pageType() !== 'item') return;
+    VAI.detectOwnership().then((o) => (ownership ??= o)).catch(() => {});
+  }
+
   // ---------- page-aware boot ----------
   function updatePageChip() {
     $('.page-chip').textContent = PAGE_LABEL[VAI.pageType()];
@@ -542,8 +616,10 @@
     const settings = await send('settings:get').catch(() => null);
     if (VAI.pageType() === 'form') {
       pendingItem = await send('pendingFill:take').catch(() => null);
-      if (pendingItem || settings?.panelOpenOnForm) open('listing');
+      const accepted = VAI.currentItemId() && (await getAccepted())[VAI.currentItemId()];
+      if (pendingItem || accepted || settings?.panelOpenOnForm) open('listing');
     }
+    detectOwnershipQuietly();
   }
   boot();
 
@@ -555,6 +631,7 @@
     lastResult = null;
     extraPhotos = [];
     ownership = null;
+    detectOwnershipQuietly();
     updatePageChip();
     if (panel.classList.contains('open') && current !== 'chat') show(current);
   }, 800);

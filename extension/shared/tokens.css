@@ -129,3 +129,18 @@
 .proposal .field b { display: block; font: 600 11px/1.2 var(--font); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
 .proposal .field div { white-space: pre-wrap; font-size: 13px; }
 .proposal .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.proposal .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.proposal > p { margin: 0 0 8px; }
+.edit-row { border-top: 1px solid var(--border); padding: 8px 0; transition: opacity var(--t-fast) var(--ease-out); }
+.edit-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.edit-head b { font: 600 11px/1.2 var(--font); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.edit-state { display: inline-flex; align-items: center; gap: 4px; font: 600 11px/1.2 var(--font); color: var(--success); }
+.edit-old { font-size: 12px; color: var(--muted); text-decoration: line-through; white-space: pre-wrap; max-height: 4.5em; overflow: hidden; }
+.edit-new { font-size: 13px; white-space: pre-wrap; }
+.edit-why { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.edit-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.edit-msg { color: var(--danger); margin: 4px 0 0; }
+.edit-msg:empty { display: none; }
+.edit-row.done .edit-actions, .edit-row.ignored .edit-actions { display: none; }
+.edit-row.ignored { opacity: .5; }
+.edit-row.ignored .edit-new { text-decoration: line-through; }

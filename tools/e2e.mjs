@@ -13,6 +13,8 @@ try { pw = require('playwright'); } catch { pw = require(execSync('npm root -g')
 const ext = path.resolve('extension');
 const shots = path.resolve(process.env.SHOTS || 'test-results');
 fs.mkdirSync(shots, { recursive: true });
+// A proposal row by its exact field heading ("Taille" must not match a description mentioning "taille").
+const row = (card, label) => card.locator('.edit-row').filter({ has: card.page().locator('.edit-head b', { hasText: new RegExp(`^${label}$`) }) });
 const fixture = (f) => fs.readFileSync(path.resolve('tools/fixtures', f), 'utf8');
 const png = fs.readFileSync(path.resolve('extension/icons/icon128.png'));
 // svc-catalogue shape (Sept 2026): brand/size/condition in item_box, relative url, photos[].
@@ -46,6 +48,7 @@ await ctx.addCookies([{ name: 'access_token_web', value: 'tok123', domain: '.www
 await ctx.route('https://www.vinted.fr/**', (route) => {
   const u = new URL(route.request().url());
   if (u.pathname === '/items/new') return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
+  if (/^\/items\/\d+[^/]*\/edit/.test(u.pathname)) return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
   if (u.pathname.startsWith('/items/555')) return route.fulfill({ contentType: 'text/html', body: fixture('item.html') });
   if (u.pathname.startsWith('/items/777')) return route.fulfill({ contentType: 'text/html', body: fixture('item-other.html') });
   if (u.pathname.endsWith('.jpg')) return route.fulfill({ contentType: 'image/png', body: png });
@@ -91,6 +94,15 @@ await panel.locator('.msg.assistant').last().waitFor({ timeout: 20000 });
 check((await panel.locator('.tool-line').count()) >= 2, 'agent called tools (search_vinted, propose_listing)');
 check(await panel.locator('.proposal').count() === 1, 'proposal card rendered');
 check((await panel.locator('.msg.assistant h4').textContent()).includes('Prix'), 'markdown answer rendered');
+// accept fields one by one: pick the "vendre vite" price, ignore the size
+const card = panel.locator('.proposal').last();
+check(await card.locator('.edit-row').count() >= 4, 'proposal split into per-field rows');
+await row(card, 'Prix').locator('[data-act=accept]', { hasText: 'Vendre vite' }).click();
+await row(card, 'Prix').and(card.locator('.edit-row.done')).waitFor({ timeout: 5000 });
+check((await page.evaluate(() => price.value)) === '19', 'price option "vendre vite" applied alone (19 €)');
+await row(card, 'Taille').locator('[data-act=ignore]').click();
+check(await card.locator('.edit-row.ignored').count() === 1 && (await row(card, 'Taille').getAttribute('class')).includes('ignored'), 'size ignored on its own');
+check((await row(card, 'Titre').textContent()).includes('Déjà en place'), 'title already on the form → marked "déjà en place"');
 await page.screenshot({ path: `${shots}/2-chat.png` });
 
 // 3. Item page: link to library + SKU badge
@@ -126,6 +138,27 @@ await p2.locator('.sku-msg [data-act=swap]').click();
 await p2.locator('.sku-btn .sku', { hasText: '#0001' }).waitFor({ timeout: 5000 });
 check(true, 'numbers swapped (#0009 ↔ #0001)');
 await item.screenshot({ path: `${shots}/3-item.png` });
+// agent edits on my own listing: accept 2 of 3, then apply them on the edit form
+await p2.locator('[data-tab=chat]').click();
+await p2.locator('.chat textarea').fill('Optimise mon annonce');
+await p2.locator('.chat textarea').press('Enter');
+const edits = p2.locator('.proposal', { hasText: 'Modifications proposées' });
+await edits.waitFor({ timeout: 20000 });
+check(await edits.locator('.edit-row').count() === 3, 'propose_edits → 3 separate edits');
+await row(edits, 'Titre').locator('[data-act=accept]').click();
+await row(edits, 'Prix').locator('[data-act=accept]').click();
+await row(edits, 'Couleur').locator('[data-act=ignore]').click();
+await edits.locator('.edit-row.done').nth(1).waitFor({ timeout: 5000 });
+check((await edits.locator('.count').textContent()).startsWith('2/3'), 'accepted 2 of 3 edits individually');
+await item.screenshot({ path: `${shots}/3c-edits.png` });
+await item.goto('https://www.vinted.fr/items/555-sweat-nike/edit');
+const acc = item.locator('#vinted-ai-root .accepted-edits');
+await acc.locator('[data-act=apply-accepted]').waitFor({ timeout: 8000 });
+check((await acc.textContent()).includes('2 modification'), 'edit form offers the 2 accepted edits');
+await acc.locator('[data-act=apply-accepted]').click();
+await acc.locator('.report', { hasText: 'Rempli' }).waitFor({ timeout: 8000 });
+const edited = await item.evaluate(() => ({ title: title.value, price: price.value }));
+check(edited.title === 'Sweat Nike Club gris M coton' && edited.price === '22', 'accepted edits applied on the edit form (ignored one skipped)');
 
 // someone else's listing → competitor menu
 const other = await ctx.newPage();

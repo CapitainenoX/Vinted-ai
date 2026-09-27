@@ -24,6 +24,9 @@ const LISTING_PROPS = {
   material: str('Matière'),
   category: str('Catégorie suggérée'),
   price: num('Prix conseillé en euros'),
+  price_fast: num('Prix pour vendre vite'),
+  price_max: num('Prix ambitieux'),
+  price_reasoning: str('1 phrase : sur quoi repose le prix'),
   tags: { type: 'array', items: { type: 'string' }, description: 'Mots-clés' },
 };
 
@@ -42,6 +45,27 @@ export const TOOL_DEFS = [
     focus: str('Point à examiner en priorité (optionnel)'),
   }),
   fn('propose_listing', 'Présente une annonce complète au vendeur avec des boutons Appliquer / Sauver en bibliothèque. À utiliser dès qu\'une annonce est rédigée.', LISTING_PROPS, ['title', 'description']),
+  fn('propose_edits', 'Propose des modifications champ par champ (annonce en cours ou fiche du vendeur). Le vendeur accepte ou ignore chaque modification séparément. Une entrée par champ, valeur finale prête à coller.', {
+    summary: str('1 phrase : ce que ces modifications améliorent'),
+    edits: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          field: { type: 'string', enum: ['title', 'description', 'price', 'brand', 'size', 'condition', 'color', 'material', 'category'] },
+          value: str('Nouvelle valeur complète (prix : nombre en euros)'),
+          reason: str('Pourquoi (court, chiffré si possible)'),
+        },
+        required: ['field', 'value'],
+      },
+    },
+  }, ['edits']),
+  fn('propose_price', 'Présente un prix avec 3 options cliquables (conseillé / vendre vite / ambitieux) que le vendeur peut appliquer. À utiliser dès que tu donnes un prix.', {
+    price: num('Prix conseillé'),
+    price_fast: num('Prix pour vendre vite'),
+    price_max: num('Prix ambitieux'),
+    reasoning: str('Sur quoi repose le prix (nb d\'annonces, médiane…)'),
+  }, ['price']),
   fn('fill_form', 'Remplit directement le formulaire d\'annonce Vinted ouvert (seulement si le vendeur le demande).', LISTING_PROPS),
   fn('library_search', 'Cherche dans la bibliothèque du vendeur.', {
     query: str('Texte libre : numéro (#0012), titre, marque, note…'),
@@ -80,8 +104,18 @@ export async function runTool(name, args, ctx) {
     case 'analyze_photos':
       return analyzePhotos(ctx, args.focus);
     case 'propose_listing':
-      ctx.emit({ type: 'proposal', listing: args });
-      return { ok: true, note: 'Annonce affichée au vendeur avec les boutons Appliquer / Sauver.' };
+      ctx.emit({ type: 'card', card: { kind: 'listing', ...args } });
+      return { ok: true, note: 'Annonce affichée : le vendeur applique chaque champ séparément ou sauve en bibliothèque.' };
+    case 'propose_edits': {
+      const edits = (Array.isArray(args.edits) ? args.edits : []).filter((e) => e?.field && e.value != null && e.value !== '');
+      if (!edits.length) throw new Error('Aucune modification valide (field + value requis).');
+      ctx.emit({ type: 'card', card: { kind: 'edits', summary: args.summary || '', edits } });
+      return { ok: true, note: `${edits.length} modification(s) affichée(s) : le vendeur les accepte une par une. Ne les répète pas dans ta réponse.` };
+    }
+    case 'propose_price':
+      if (!Number.isFinite(+args.price)) throw new Error('price requis');
+      ctx.emit({ type: 'card', card: { kind: 'price', ...args } });
+      return { ok: true, note: 'Options de prix affichées avec boutons Appliquer.' };
     case 'fill_form':
       return askTab(ctx, { type: 'fill_form', fields: args });
     case 'library_search': {

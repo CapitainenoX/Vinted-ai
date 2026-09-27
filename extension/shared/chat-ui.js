@@ -49,6 +49,8 @@
     read_page: 'Lecture de la page Vinted',
     analyze_photos: 'Analyse des photos',
     propose_listing: "Préparation de l'annonce",
+    propose_edits: 'Modifications proposées',
+    propose_price: 'Prix proposé',
     fill_form: 'Remplissage du formulaire',
     library_search: 'Bibliothèque',
     library_save: 'Ajout en bibliothèque',
@@ -57,10 +59,34 @@
     relist_item: 'Republication',
   };
 
-  const PROPOSAL_FIELDS = [
-    ['title', 'Titre'], ['price', 'Prix'], ['brand', 'Marque'], ['size', 'Taille'], ['condition', 'État'],
-    ['color', 'Couleur'], ['material', 'Matière'], ['category', 'Catégorie'], ['description', 'Description'],
-  ];
+  const FIELD_LABELS = {
+    title: 'Titre', price: 'Prix', brand: 'Marque', size: 'Taille', condition: 'État',
+    color: 'Couleur', material: 'Matière', category: 'Catégorie', description: 'Description',
+  };
+  const LISTING_ORDER = ['title', 'price', 'brand', 'size', 'condition', 'color', 'material', 'category', 'description'];
+  const sameValue = (a, b) => String(a ?? '').replace(',', '.').trim().toLowerCase() === String(b ?? '').replace(',', '.').trim().toLowerCase();
+  const fmtPrice = (v) => `${String(v).replace('.', ',')} €`;
+
+  // Every card (listing / edits / price) becomes a list of rows the seller accepts one by one.
+  // A row: { field, value, reason?, choices?: [{ label, value }] } — choices are used for prices.
+  function cardRows(card) {
+    const priceChoices = (c) =>
+      [['Conseillé', c.price], ['Vendre vite', c.price_fast], ['Ambitieux', c.price_max]]
+        .filter(([, v]) => Number.isFinite(parseFloat(v)))
+        .map(([label, v]) => ({ label, value: parseFloat(v) }));
+    if (card.kind === 'price') return [{ field: 'price', value: card.price, reason: card.reasoning, choices: priceChoices(card) }];
+    if (card.kind === 'edits') {
+      return card.edits.map((e) => (e.field === 'price' ? { ...e, value: parseFloat(String(e.value).replace(',', '.')) || e.value } : e));
+    }
+    return LISTING_ORDER.filter((k) => card[k] != null && card[k] !== '').map((k) =>
+      k === 'price' ? { field: k, value: card.price, reason: card.price_reasoning, choices: priceChoices(card) } : { field: k, value: card[k] },
+    );
+  }
+  const CARD_HEAD = {
+    listing: ['sparkles', 'Annonce proposée'],
+    edits: ['wand', 'Modifications proposées'],
+    price: ['target', 'Prix proposé'],
+  };
 
   class Chat {
     constructor({ root, chatId, suggestions = [], getPageContext = () => null, canApply = false }) {
@@ -123,7 +149,10 @@
       const history = await VAI.send('chat:get', { id: this.chatId }).catch(() => []);
       this.log.innerHTML = '';
       if (!history.length) return this.renderEmpty();
-      for (const m of history) this.addMessage(m.role, m.role === 'user' ? (m.display ?? m.content) + (m.images ? `  📷×${m.images}` : '') : m.content);
+      for (const m of history) {
+        for (const c of m.cards || []) this.addCard(c);
+        this.addMessage(m.role, m.role === 'user' ? (m.display ?? m.content) + (m.images ? `  📷×${m.images}` : '') : m.content);
+      }
       this.scroll();
     }
 
@@ -170,40 +199,110 @@
       return el;
     }
 
-    addProposal(listing) {
+    // Apply mode comes from the host page: 'fill' (form open), 'queue' (own item page → applied on its edit form),
+    // or null (dashboard / other pages → copy to clipboard).
+    applyMode() {
+      return this.canApply ? VAI.applyMode?.() || null : null;
+    }
+
+    addCard(card) {
+      const rows = cardRows(card);
+      const mode = this.applyMode();
+      const current = mode === 'fill' ? VAI.readForm?.() || {} : {};
+      const verb = mode === 'fill' ? 'Appliquer' : mode === 'queue' ? 'Accepter' : 'Copier';
+      const [headIcon, headText] = CARD_HEAD[card.kind] || CARD_HEAD.listing;
       const el = document.createElement('div');
       el.className = 'card proposal fade-up';
-      el.innerHTML =
-        `<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px"><span class="chip accent">${icon('sparkles', 12)} Annonce proposée</span></div>` +
-        PROPOSAL_FIELDS.filter(([k]) => listing[k] != null && listing[k] !== '')
-          .map(([k, label]) => `<div class="field"><b>${label}</b><div>${esc(k === 'price' ? listing[k] + ' €' : listing[k])}</div></div>`)
-          .join('') +
-        (listing.tags?.length ? `<div class="field"><b>Mots-clés</b><div>${listing.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join(' ')}</div></div>` : '') +
-        `<div class="actions">
-          ${this.canApply ? `<button class="btn primary sm" data-act="apply">${icon('wand', 14)} Appliquer</button>` : ''}
-          <button class="btn sm" data-act="save">${icon('save', 14)} Sauver en bibliothèque</button>
-          <button class="btn sm ghost" data-act="copy">${icon('copy', 14)} Copier</button>
+      const rowHtml = (r, i) => {
+        const old = current[r.field];
+        const value = r.field === 'price' ? fmtPrice(r.value) : String(r.value);
+        const showOld = old && !sameValue(old, r.value);
+        return `<div class="edit-row" data-i="${i}">
+          <div class="edit-head"><b>${esc(FIELD_LABELS[r.field] || r.field)}</b><span class="edit-state"></span></div>
+          ${showOld ? `<div class="edit-old">${esc(r.field === 'price' ? fmtPrice(old) : old)}</div>` : ''}
+          ${r.choices?.length > 1 ? '' : `<div class="edit-new">${esc(value)}</div>`}
+          ${r.reason ? `<div class="edit-why">${esc(r.reason)}</div>` : ''}
+          <div class="edit-actions">
+            ${
+              r.choices?.length > 1
+                ? r.choices.map((c, j) => `<button class="btn sm ${j ? '' : 'primary'}" data-act="accept" data-v="${j}">${esc(c.label)} · ${esc(fmtPrice(c.value))}</button>`).join('')
+                : `<button class="btn sm primary" data-act="accept">${icon(mode ? 'check' : 'copy', 12)} ${verb}</button>`
+            }
+            <button class="btn sm ghost" data-act="ignore">${icon('x', 12)} Ignorer</button>
+          </div>
+          <p class="small edit-msg"></p>
         </div>`;
-      el.querySelector('[data-act=apply]')?.addEventListener('click', async (e) => {
+      };
+      el.innerHTML =
+        `<div class="row-between card-head"><span class="chip accent">${icon(headIcon, 12)} ${headText}</span><span class="small muted count"></span></div>` +
+        (card.summary ? `<p class="small">${esc(card.summary)}</p>` : '') +
+        rows.map(rowHtml).join('') +
+        (card.tags?.length ? `<div class="field"><b>Mots-clés</b><div>${card.tags.map((t) => `<span class="chip">${esc(t)}</span>`).join(' ')}</div></div>` : '') +
+        `<div class="actions">
+          ${mode && rows.length > 1 ? `<button class="btn sm" data-act="accept-rest">${icon('check', 14)} ${verb} le reste</button>` : ''}
+          ${card.kind === 'listing' ? `<button class="btn sm" data-act="save">${icon('save', 14)} Sauver en bibliothèque</button>` : ''}
+          ${card.kind === 'listing' ? `<button class="btn sm ghost" data-act="copy">${icon('copy', 14)} Copier</button>` : ''}
+        </div>`;
+
+      const state = rows.map(() => null); // null | 'done' | 'ignored'
+      const updateCount = () => {
+        const done = state.filter((s) => s === 'done').length;
+        el.querySelector('.count').textContent = rows.length > 1 || done ? `${done}/${rows.length} ${mode === 'fill' ? 'appliqué(s)' : 'accepté(s)'}` : '';
+        const rest = el.querySelector('[data-act=accept-rest]');
+        if (rest) rest.hidden = state.every(Boolean);
+      };
+      const settle = (i, status, text) => {
+        const rowEl = el.querySelector(`.edit-row[data-i="${i}"]`);
+        state[i] = status;
+        rowEl.classList.toggle('done', status === 'done');
+        rowEl.classList.toggle('ignored', status === 'ignored');
+        rowEl.querySelector('.edit-state').innerHTML = status === 'done' ? `${icon('check', 12)} ${esc(text)}` : status === 'ignored' ? 'Ignoré' : '';
+        rowEl.querySelectorAll('.edit-actions button').forEach((b) => (b.disabled = !!status));
+        updateCount();
+      };
+      const accept = async (i, value) => {
+        const r = rows[i];
+        const rowEl = el.querySelector(`.edit-row[data-i="${i}"]`);
+        const msg = rowEl.querySelector('.edit-msg');
+        msg.textContent = '';
+        rowEl.querySelectorAll('.edit-actions button').forEach((b) => (b.disabled = true));
+        try {
+          const res = mode ? await VAI.applyEdit?.(r.field, value) : null;
+          if (res?.status === 'applied') return settle(i, 'done', r.field === 'price' ? `Appliqué ${fmtPrice(value)}` : 'Appliqué');
+          if (res?.status === 'queued') return settle(i, 'done', 'Accepté');
+          if (res?.status === 'failed') throw new Error(res.message);
+          await navigator.clipboard.writeText(String(value));
+          settle(i, 'done', 'Copié');
+        } catch (err) {
+          msg.textContent = err.message || String(err);
+          rowEl.querySelectorAll('.edit-actions button').forEach((b) => (b.disabled = false));
+        }
+      };
+      el.querySelectorAll('.edit-row').forEach((rowEl) => {
+        const i = +rowEl.dataset.i;
+        rowEl.querySelectorAll('[data-act=accept]').forEach((b) => {
+          b.onclick = () => accept(i, b.dataset.v != null ? rows[i].choices[+b.dataset.v].value : rows[i].value);
+        });
+        rowEl.querySelector('[data-act=ignore]').onclick = () => settle(i, 'ignored');
+      });
+      el.querySelector('[data-act=accept-rest]')?.addEventListener('click', async () => {
+        for (const [i, r] of rows.entries()) if (!state[i]) await accept(i, r.value);
+      });
+      el.querySelector('[data-act=save]')?.addEventListener('click', async (e) => {
         const btn = e.currentTarget;
         btn.disabled = true;
-        try {
-          const r = await VAI.applyListing?.(listing);
-          btn.innerHTML = `${icon('check', 14)} ${r?.filled?.length ?? 0} champ(s) rempli(s)`;
-        } catch (err) {
-          btn.textContent = err.message;
-        }
-      });
-      el.querySelector('[data-act=save]').onclick = async (e) => {
-        const btn = e.currentTarget;
+        const { kind, ...listing } = card;
         const item = await VAI.send('library:create', { data: { ...listing, photos: (await VAI.currentThumbs?.()) || [] } });
         btn.innerHTML = `${icon('check', 14)} Sauvé ${esc(item.sku)}`;
-        btn.disabled = true;
-      };
-      el.querySelector('[data-act=copy]').onclick = (e) => {
-        navigator.clipboard.writeText(`${listing.title}\n\n${listing.description}`);
+      });
+      el.querySelector('[data-act=copy]')?.addEventListener('click', (e) => {
+        navigator.clipboard.writeText(`${card.title}\n\n${card.description || ''}`);
         e.currentTarget.innerHTML = `${icon('check', 14)} Copié`;
-      };
+      });
+      // Already on the form → nothing to accept (price options stay open: the seller may still want another one).
+      rows.forEach((r, i) => !(r.choices?.length > 1) && current[r.field] && sameValue(current[r.field], r.value) && settle(i, 'done', 'Déjà en place'));
+      updateCount();
+      this.log.querySelector('.chat-empty')?.remove();
       this.log.appendChild(el);
       this.scroll();
     }
@@ -248,7 +347,7 @@
           if (e.error) pending.classList.add('err');
           if (e.summary) pending.insertAdjacentHTML('beforeend', `<span> — ${esc(e.summary)}</span>`);
           pending = null;
-        } else if (e.type === 'proposal') this.addProposal(e.listing);
+        } else if (e.type === 'card') this.addCard(e.card);
         else if (e.type === 'library_changed') this.root.dispatchEvent(new CustomEvent('library-changed', { bubbles: true }));
         else if (e.type === 'final') this.addMessage('assistant', e.text);
         else if (e.type === 'error') this.addMessage('error', e.error);
