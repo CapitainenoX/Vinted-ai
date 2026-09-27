@@ -188,7 +188,8 @@ function openDrawer(item) {
   let photos = [...(item.photos || [])];
   const field = (k, label, type = 'text', extra = '') => `<div><label class="label" for="f-${k}">${label}</label><input class="input ${type === 'number' ? 'num' : ''}" id="f-${k}" data-k="${k}" type="${type}" step="0.01" value="${esc(item[k] ?? '')}" ${extra}></div>`;
   d.innerHTML = `
-    <div class="head"><span class="sku">${esc(item.sku)}</span><button class="icon-btn" data-act="close" aria-label="Fermer">${icon('x')}</button></div>
+    <div class="head"><div class="sku-host"></div><button class="icon-btn" data-act="close" aria-label="Fermer">${icon('x')}</button></div>
+    <p class="small sku-msg" hidden></p>
     <p class="muted small">Écris ce numéro sur le sachet de l'article : quand il est vendu, tu le retrouves en une seconde.</p>
     <div class="photos">${''}</div>
     <label class="label" for="f-title">Titre</label><input class="input" id="f-title" data-k="title" value="${esc(item.title || '')}">
@@ -204,7 +205,7 @@ function openDrawer(item) {
     </div>
     <label class="label" for="f-tags">Mots-clés</label><input class="input" id="f-tags" data-k="tags" value="${esc((item.tags || []).join(', '))}">
     <label class="label" for="f-notes">Notes</label><textarea class="textarea" id="f-notes" data-k="notes" rows="3">${esc(item.notes || '')}</textarea>
-    <div class="timeline">${(item.history || []).map((h) => `${new Date(h.at).toLocaleString('fr-FR')} — ${store.STATUSES[h.event] || 'créé'}`).join('<br>')}</div>
+    <div class="timeline">${(item.history || []).map((h) => `${new Date(h.at).toLocaleString('fr-FR')} — ${h.event === 'renumbered' ? `numéro → ${esc(h.to)}` : store.STATUSES[h.event] || 'créé'}`).join('<br>')}</div>
     <div class="foot">
       <button class="btn primary" data-act="save">${icon('save', 14)} Enregistrer</button>
       <button class="btn" data-act="relist" title="Ouvre Vinted avec un formulaire pré-rempli">${icon('refresh', 14)} Republier</button>
@@ -223,6 +224,7 @@ function openDrawer(item) {
     };
   };
   drawPhotos();
+  drawNumber(d, item);
   const close = () => {
     d.classList.remove('open');
     $('#scrim').hidden = true;
@@ -249,6 +251,44 @@ function openDrawer(item) {
   $('#scrim').hidden = false;
   requestAnimationFrame(() => d.classList.add('open'));
   $('#f-title', d).focus();
+}
+
+// Number editor in the drawer: "#0003 ✎" → input; if taken, offer to swap.
+function drawNumber(d, item) {
+  const host = $('.sku-host', d);
+  const msg = $('.sku-msg', d);
+  const show = () => {
+    host.innerHTML = `<button class="sku-btn" title="Changer le numéro"><span class="sku">${esc(item.sku)}</span>${icon('wand', 14)}</button>`;
+    $('.sku-btn', host).onclick = edit;
+  };
+  const edit = () => {
+    host.innerHTML = `<form class="sku-edit"><span class="sku">#</span><input class="input num" inputmode="numeric" maxlength="5" aria-label="Nouveau numéro" value="${store.skuNumber(item.sku)}"><button class="btn primary sm">OK</button><button class="btn ghost sm" type="button">Annuler</button></form>`;
+    const input = $('input', host);
+    input.select();
+    $('button[type=button]', host).onclick = () => ((msg.hidden = true), show());
+    $('form', host).onsubmit = (e) => (e.preventDefault(), apply(input.value, false));
+  };
+  const apply = async (n, swap) => {
+    try {
+      const r = await store.setItemNumber(item.id, n, { swap });
+      item.sku = r.item.sku;
+      msg.hidden = !r.swappedWith;
+      if (r.swappedWith) msg.textContent = `Numéros échangés : l'autre article est maintenant ${r.swappedWith.sku}.`;
+      show();
+      renderLibrary();
+    } catch (err) {
+      msg.hidden = false;
+      msg.textContent = err.message + ' ';
+      if (err.code === 'SKU_TAKEN') {
+        const b = document.createElement('button');
+        b.className = 'btn sm';
+        b.textContent = 'Échanger les numéros';
+        b.onclick = () => apply(n, true);
+        msg.appendChild(b);
+      }
+    }
+  };
+  show();
 }
 
 // ---------- agent ----------

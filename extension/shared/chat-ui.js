@@ -131,7 +131,7 @@
       this.log.innerHTML = `<div class="chat-empty">
         <div style="color:var(--accent)">${icon('sparkles', 22)}</div>
         <p><strong>Ton agent Vinted.</strong><br>Annonces depuis les photos, prix du marché, audit, stats, bibliothèque.</p>
-        <div class="suggest">${this.suggestions.map((s) => `<button class="btn sm">${esc(s)}</button>`).join('')}</div>
+        <div class="suggest">${(typeof this.suggestions === 'function' ? this.suggestions() : this.suggestions).map((s) => `<button class="btn sm">${esc(s)}</button>`).join('')}</div>
       </div>`;
       this.log.querySelectorAll('.suggest button').forEach((b) => (b.onclick = () => this.submit(b.textContent)));
     }

@@ -79,7 +79,7 @@
   function pageContext() {
     const t = VAI.pageType();
     if (t === 'form') return `formulaire de création/édition d'annonce (${location.pathname})`;
-    if (t === 'item') return `fiche article ${VAI.currentItemId()} (${location.pathname})`;
+    if (t === 'item') return `fiche article ${VAI.currentItemId()} (${location.pathname}) — ${ownership?.own ? "c'est l'annonce du vendeur (la sienne)" : "annonce d'un autre vendeur"}`;
     return `${PAGE_LABEL[t]} (${location.pathname})`;
   }
 
@@ -90,11 +90,13 @@
       chatId: 'panel',
       canApply: true,
       getPageContext: pageContext,
-      suggestions:
+      suggestions: () =>
         VAI.pageType() === 'form'
           ? ['Rédige mon annonce depuis les photos', 'Quel prix pour vendre en 1 semaine ?', "Qu'est-ce qui manque à mon annonce ?"]
           : VAI.pageType() === 'item'
-            ? ['Audite cette annonce', 'Ce prix est-il bon ?', 'Comment la faire remonter ?']
+            ? ownership?.own
+              ? ['Optimise mon annonce', 'Comment la faire remonter ?', 'Mon prix est-il bon ?']
+              : ['Bonne affaire à revendre ?', 'Que fait-il mieux que moi ?', 'Prix du marché pour cet article']
             : ['Mes stats de ventes', 'Quelles marques se vendent le mieux ?', 'Mes articles en vente depuis longtemps'],
     });
     $('[data-view=chat]').addEventListener('library-changed', () => VAI.refreshIndex());
@@ -308,45 +310,142 @@
       });
   }
 
-  // ---------- item page: link to library, notes, audit ----------
+  // ---------- number editor (#0001) — shared by the item page and the library tab ----------
+  // Renders "#0003 ✎"; click → inline input. If the number is taken, offers to swap.
+  function numberEditor(host, item, onChange) {
+    const draw = () => {
+      host.innerHTML = `<button class="sku-btn" title="Changer le numéro"><span class="sku big">${esc(item.sku)}</span>${icon('wand', 12)}</button>`;
+      host.querySelector('.sku-btn').onclick = edit;
+    };
+    const edit = () => {
+      host.innerHTML = `<form class="sku-edit"><span class="sku">#</span><input class="input num" inputmode="numeric" maxlength="5" value="${esc(String(parseInt(item.sku.slice(1), 10)))}" aria-label="Nouveau numéro">
+        <button class="btn primary sm" type="submit">${icon('check', 12)}</button><button class="btn ghost sm" type="button" data-act="cancel">${icon('x', 12)}</button></form><p class="small sku-msg"></p>`;
+      const input = host.querySelector('input');
+      input.focus();
+      input.select();
+      host.querySelector('[data-act=cancel]').onclick = draw;
+      host.querySelector('form').onsubmit = async (e) => {
+        e.preventDefault();
+        await apply(input.value, false);
+      };
+    };
+    const apply = async (number, swap) => {
+      const msg = host.querySelector('.sku-msg');
+      try {
+        const r = await send('library:setNumber', { ref: item.id, number, swap });
+        if (r.conflict) {
+          msg.innerHTML = `${esc(r.message)} <button class="btn sm" data-act="swap">Échanger les numéros</button>`;
+          msg.querySelector('[data-act=swap]').onclick = () => apply(number, true);
+          return;
+        }
+        Object.assign(item, r.item);
+        draw();
+        VAI.refreshIndex();
+        onChange?.(r);
+      } catch (err) {
+        msg.textContent = err.message;
+      }
+    };
+    draw();
+  }
+
+  // ---------- item page: menu adapts to "my listing" vs "someone else's" ----------
+  let ownership = null;
+
+  function statusFields(item) {
+    return `<div class="grid2">
+      <div><span class="label">Statut</span><select class="select" data-k="status">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === item.status ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+      <div><span class="label">Vendu à (€)</span><input class="input num" data-k="soldPrice" value="${esc(item.soldPrice ?? '')}" inputmode="decimal"></div>
+      <div><span class="label">Coût d'achat</span><input class="input num" data-k="cost" value="${esc(item.cost ?? '')}" inputmode="decimal"></div>
+      <div><span class="label">Emplacement</span><input class="input" data-k="location" value="${esc(item.location ?? '')}" placeholder="Bac A, étagère 2…"></div>
+    </div>
+    <span class="label">Notes</span><textarea class="textarea" data-k="notes" rows="3">${esc(item.notes || '')}</textarea>`;
+  }
+
   async function renderItemPage(view) {
     const id = VAI.currentItemId();
     const info = VAI.readItemPage();
-    const linked = id ? await send('library:get', { ref: id }).catch(() => null) : null;
-    view.innerHTML = `<div class="pad">
-      <div class="card">
-        ${linked
-          ? `<div class="row-between"><span class="sku big">${esc(linked.sku)}</span><span class="chip ${STATUS_CHIP[linked.status]}">${STATUS[linked.status]}</span></div>
-             <p class="small">${esc(linked.title || '')}</p>
-             <div class="grid2">
-               <div><span class="label">Statut</span><select class="select" data-k="status">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === linked.status ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
-               <div><span class="label">Vendu à (€)</span><input class="input num" data-k="soldPrice" value="${esc(linked.soldPrice ?? '')}" inputmode="decimal"></div>
-               <div><span class="label">Coût d'achat</span><input class="input num" data-k="cost" value="${esc(linked.cost ?? '')}" inputmode="decimal"></div>
-               <div><span class="label">Emplacement</span><input class="input" data-k="location" value="${esc(linked.location ?? '')}" placeholder="Bac A, étagère 2…"></div>
-             </div>
-             <span class="label">Notes</span><textarea class="textarea" data-k="notes" rows="3">${esc(linked.notes || '')}</textarea>
-             <div class="actions"><button class="btn primary sm" data-act="save-link">${icon('save', 12)} Enregistrer</button><span class="small muted saved"></span></div>`
-          : `<strong>Cet article n'est pas dans ta bibliothèque</strong>
-             <p class="small muted">${esc(info.title)}</p>
-             <p class="small">Lie-le pour lui donner un numéro (#0001…), l'annoter et le retrouver quand il est vendu.</p>
-             <div class="actions"><button class="btn primary sm" data-act="link">${icon('link', 12)} Lier à ma bibliothèque</button></div>`}
-      </div>
-      <div class="card" style="margin-top:10px">
-        <strong>Analyse de l'annonce</strong>
-        <p class="small muted">Compare à la concurrence : prix, mots-clés, ce qui manque.</p>
-        <div class="actions"><button class="btn sm" data-act="audit">${icon('target', 12)} Auditer cette annonce</button>
-        <button class="btn sm ghost" data-act="ask">${icon('chat', 12)} Demander à l'agent</button></div>
-      </div>
-      <div class="result"></div></div>`;
+    view.innerHTML = '<div class="pad"><span class="spinner"></span></div>';
+    ownership = await VAI.detectOwnership();
+    const own = ownership.own;
+    const linked = ownership.linked || (id ? await send('library:get', { ref: id }).catch(() => null) : null);
+    const nextNumber = linked ? null : await send('library:nextNumber').catch(() => null);
+    const priceNum = parseFloat(String(info.price).replace(/[^\d,.]/g, '').replace(',', '.'));
 
+    const ownerBar = `<div class="owner-bar ${own ? 'mine' : ''}">
+      <span class="chip ${own ? 'accent' : ''}">${own ? `${icon('tag', 12)} Mon annonce` : `${icon('search', 12)} Annonce d'un autre vendeur`}</span>
+      <span class="small muted">${esc(ownership.reason)}</span>
+      <button class="btn ghost sm" data-act="flip">${own ? 'Pas la mienne ?' : "C'est la mienne ?"}</button>
+    </div>
+    ${ownership.confident ? '' : `<div class="card ask-owner"><strong>C'est ton annonce ?</strong><div class="actions"><button class="btn primary sm" data-own="1">Oui, c'est la mienne</button><button class="btn sm" data-own="0">Non</button></div></div>`}`;
+
+    const mine = linked
+      ? `<div class="card">
+          <div class="row-between"><div class="sku-host"></div><span class="chip ${STATUS_CHIP[linked.status]}">${STATUS[linked.status]}</span></div>
+          <p class="small">${esc(linked.title || '')}</p>
+          ${statusFields(linked)}
+          <div class="actions"><button class="btn primary sm" data-act="save-link">${icon('save', 12)} Enregistrer</button><span class="small muted saved"></span></div>
+        </div>`
+      : `<div class="card">
+          <strong>Pas encore dans ta bibliothèque</strong>
+          <p class="small">Ajoute-la : elle recevra le numéro <span class="sku">${esc(nextNumber || '')}</span> (modifiable) à écrire sur le sachet.</p>
+          <div class="actions"><button class="btn primary sm" data-act="link">${icon('link', 12)} Ajouter à ma bibliothèque</button></div>
+        </div>`;
+
+    const myTools = `<div class="card">
+        <strong>Booster mon annonce</strong>
+        <div class="tool-grid">
+          <button class="btn sm" data-act="audit">${icon('target', 12)} Optimiser (audit)</button>
+          <button class="btn sm" data-ask="Ma annonce stagne : comment la faire remonter ? Donne un plan concret (baisse de prix, republication, photos, titre, horaire).">${icon('refresh', 12)} Faire remonter</button>
+          <button class="btn sm" data-ask="Mon prix est-il bien placé face aux annonces comparables ? Donne le prix pour vendre en 7 jours.">${icon('tag', 12)} Vérifier mon prix</button>
+          ${linked ? `<button class="btn sm" data-act="relist">${icon('plus', 12)} Republier</button>` : ''}
+          <a class="btn sm ghost" href="${esc(location.origin)}/items/${esc(id)}/edit">${icon('external', 12)} Modifier sur Vinted</a>
+        </div>
+      </div>`;
+
+    const theirTools = `<div class="card">
+        <strong>Analyser ce concurrent</strong>
+        <p class="small muted">${esc(info.title)}${Number.isFinite(priceNum) ? ` · <span class="num">${priceNum} €</span>` : ''}</p>
+        <div class="tool-grid">
+          <button class="btn sm" data-act="audit">${icon('target', 12)} Position marché</button>
+          <button class="btn sm" data-ask="Est-ce une bonne affaire à acheter pour revendre ? Donne le prix de revente probable, la marge, et le prix d'achat max à proposer.">${icon('tag', 12)} Bonne affaire à revendre ?</button>
+          <button class="btn sm" data-ask="Qu'est-ce que cette annonce fait mieux ou moins bien que les miennes ? Compare avec ma bibliothèque et donne 3 choses à copier.">${icon('book', 12)} Comparer à mes annonces</button>
+          <button class="btn sm" data-ask="Rédige une offre polie et efficace à envoyer à ce vendeur pour négocier le prix.">${icon('chat', 12)} Message de négociation</button>
+        </div>
+      </div>
+      <div class="card">
+        <strong>Tu l'as acheté ?</strong>
+        <p class="small">Ajoute-le à ta bibliothèque comme article à revendre (coût = ${Number.isFinite(priceNum) ? priceNum + ' €' : 'prix payé'}) avec le numéro <span class="sku">${esc(nextNumber || '')}</span>.</p>
+        <div class="actions"><button class="btn sm" data-act="bought">${icon('plus', 12)} Ajouter comme achat</button><span class="small muted bought-msg"></span></div>
+      </div>`;
+
+    view.innerHTML = `<div class="pad stack">${ownerBar}${own ? mine + myTools : theirTools}<div class="result"></div></div>`;
+    if (linked && own) numberEditor(view.querySelector('.sku-host'), linked);
+
+    const rerender = () => renderItemPage(view);
+    view.querySelector('[data-act=flip]').onclick = async () => {
+      await VAI.setOwnOverride(!own);
+      rerender();
+    };
+    view.querySelectorAll('[data-own]').forEach((b) => (b.onclick = async () => {
+      await VAI.setOwnOverride(b.dataset.own === '1');
+      rerender();
+    }));
     view.querySelector('[data-act=link]')?.addEventListener('click', (e) =>
       busy(e.currentTarget, async () => {
-        const price = parseFloat(String(info.price).replace(/[^\d,.]/g, '').replace(',', '.'));
         await send('library:create', {
-          data: { title: info.title, description: info.description, price: Number.isFinite(price) ? price : null, vintedId: id, vintedUrl: info.url, status: 'listed', photos: await VAI.getPhotos(3, 320) },
+          data: { title: info.title, description: info.description, price: Number.isFinite(priceNum) ? priceNum : null, vintedId: id, vintedUrl: info.url, status: 'listed', photos: await VAI.getPhotos(3, 320) },
         });
         await VAI.refreshIndex();
-        renderItemPage(view);
+        rerender();
+      }),
+    );
+    view.querySelector('[data-act=bought]')?.addEventListener('click', (e) =>
+      busy(e.currentTarget, async () => {
+        const item = await send('library:create', {
+          data: { title: info.title, description: info.description, cost: Number.isFinite(priceNum) ? priceNum : null, status: 'draft', notes: `Acheté sur Vinted : ${info.url}`, photos: await VAI.getPhotos(3, 320) },
+        });
+        view.querySelector('.bought-msg').innerHTML = `Ajouté <span class="sku">${esc(item.sku)}</span> ✓`;
       }),
     );
     view.querySelector('[data-act=save-link]')?.addEventListener('click', async () => {
@@ -356,12 +455,13 @@
       view.querySelector('.saved').textContent = 'Enregistré ✓';
       VAI.refreshIndex();
     });
+    view.querySelector('[data-act=relist]')?.addEventListener('click', () => send('relist', { ref: linked.id }));
     view.querySelector('[data-act=audit]').onclick = (e) =>
-      audit(e.currentTarget, view, { title: info.title, description: info.description, price: info.price, ...info.details });
-    view.querySelector('[data-act=ask]').onclick = () => {
+      audit(e.currentTarget, view, { title: info.title, description: info.description, price: info.price, ...info.details, isMyListing: own });
+    view.querySelectorAll('[data-ask]').forEach((b) => (b.onclick = () => {
       show('chat');
-      chat.submit('Audite cette annonce face à la concurrence et dis-moi comment la faire remonter.');
-    };
+      chat.submit(b.dataset.ask);
+    }));
   }
 
   // ---------- library tab ----------
@@ -406,6 +506,7 @@
     const existing = el.querySelector('.item-edit');
     if (existing) return existing.remove();
     el.insertAdjacentHTML('beforeend', `<div class="item-edit fade-up">
+      <div class="sku-host"></div>
       <div class="grid2">
         <div><span class="label">Statut</span><select class="select" data-k="status">${Object.entries(STATUS).map(([k, v]) => `<option value="${k}" ${k === item.status ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
         <div><span class="label">Vendu à (€)</span><input class="input num" data-k="soldPrice" value="${esc(item.soldPrice ?? '')}"></div>
@@ -420,6 +521,7 @@
         ${VAI.pageType() === 'form' ? `<button class="btn sm ghost" data-act="fill">${icon('wand', 12)} Remplir ici</button>` : ''}
       </div></div>`);
     const edit = el.querySelector('.item-edit');
+    numberEditor(edit.querySelector('.sku-host'), item, () => (el.querySelector('.item-row .sku').textContent = item.sku));
     edit.querySelector('[data-act=save]').onclick = async (e) => {
       const patch = {};
       edit.querySelectorAll('[data-k]').forEach((f) => (patch[f.dataset.k] = f.value));
@@ -452,6 +554,7 @@
     lastUrl = location.href;
     lastResult = null;
     extraPhotos = [];
+    ownership = null;
     updatePageChip();
     if (panel.classList.contains('open') && current !== 'chat') show(current);
   }, 800);

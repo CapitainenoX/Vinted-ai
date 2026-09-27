@@ -24,6 +24,16 @@ const handlers = {
   'library:create': ({ data }) => store.createItem(data),
   'library:update': ({ ref, patch }) => store.updateItem(ref, patch),
   'library:delete': ({ ref }) => store.deleteItem(ref),
+  // Returns { conflict } instead of throwing so the UI can offer a swap.
+  'library:setNumber': async ({ ref, number, swap }) => {
+    try {
+      return await store.setItemNumber(ref, number, { swap });
+    } catch (e) {
+      if (e.code === 'SKU_TAKEN') return { conflict: e.holder, message: e.message };
+      throw e;
+    }
+  },
+  'library:nextNumber': async () => store.formatSku(store.nextFreeNumber(await store.listItems(), (await store.getSettings()).skuReuseSold)),
   'library:export': () => store.exportAll(),
   'library:import': ({ data }) => store.importAll(data),
   'library:stats': async () => store.computeStats(await store.listItems(), (await store.getSettings()).feePercent),

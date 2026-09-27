@@ -18,7 +18,9 @@ Aucun build : c'est du JavaScript vanilla, tu charges le dossier `extension/` te
 | **Auditer** | Compare ton annonce à la concurrence : prix vs médiane, mots-clés absents, champs vides, photos manquantes, meilleur titre (appliquable en 1 clic). |
 | **Agent (chat)** | Chat agentique avec outils : `search_vinted` (stats prix), `web_search`, `fetch_url`, `read_page`, `analyze_photos`, `propose_listing`, `fill_form`, bibliothèque (`library_*`), `relist_item`. Tu peux glisser/coller des photos. Il connaît le copywriting, le SEO de la recherche Vinted, le pricing et les leviers pour faire remonter un article. |
 | **Bibliothèque** | Chaque article reçoit un numéro **#0001, #0002…** à écrire sur son sachet de stockage. Notes, emplacement, coût d'achat, prix de vente, acheteur, statut (brouillon / en vente / vendu / archivé). |
-| **Pages Vinted** | Un badge **#numéro** s'affiche sur chaque lien vers un de tes articles (dressing, messages, ventes) : tu sais tout de suite quel sachet prendre. Sur une fiche article : lier à la bibliothèque, annoter, marquer vendu. |
+| **Numéros intelligents** | Chaque nouvel article prend le **plus petit numéro libre** : supprime #0001 et #0002, le suivant redevient #0001. Option : réutiliser les numéros des articles vendus/archivés. Clic sur le numéro (panel ou dashboard) pour le **changer** ; s'il est pris, on te propose d'**échanger**. |
+| **Pages Vinted** | Un badge **#numéro** s'affiche sur chaque lien vers un de tes articles (dressing, messages, ventes) : tu sais tout de suite quel sachet prendre. |
+| **Fiche article** | Le panel détecte si l'annonce est **la tienne** (boutons Modifier/Supprimer, vendeur reconnu, ou déjà liée) ou **celle d'un autre** (Acheter / Faire une offre). **Mienne** → numéro, statut, notes, optimiser, faire remonter, vérifier le prix, republier. **Autre vendeur** → position marché, bonne affaire à revendre ?, comparer à mes annonces, message de négociation, « ajouter comme achat ». Bouton « Pas la mienne ? / C'est la mienne ? » si la détection se trompe. |
 | **Republier** | Ouvre un nouveau formulaire Vinted pré-rempli (texte + photos) pour remettre un article qui stagne en tête des nouveautés. |
 | **Dashboard** | CA, bénéfice, panier moyen, délai de vente, taux d'écoulement, ventes par semaine, top marques, articles "à relancer" (+21 jours) avec prix conseillé −12 %. Export CSV, sauvegarde/import JSON. Clair/sombre. |
 
@@ -62,6 +64,6 @@ tools/
 
 ```bash
 node tools/mock-llm.mjs &      # faux LLM sur :8787
-node tools/e2e.mjs             # 22 vérifications ; captures dans test-results/
+node tools/e2e.mjs             # 33 vérifications ; captures dans test-results/
 ```
 Nécessite `playwright` (local ou global) et Chromium.

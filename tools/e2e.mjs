@@ -37,6 +37,7 @@ await ctx.route('https://www.vinted.fr/**', (route) => {
   if (u.pathname.startsWith('/api/v2/catalog/items')) return route.fulfill({ json: catalog });
   if (u.pathname === '/items/new') return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
   if (u.pathname.startsWith('/items/555')) return route.fulfill({ contentType: 'text/html', body: fixture('item.html') });
+  if (u.pathname.startsWith('/items/777')) return route.fulfill({ contentType: 'text/html', body: fixture('item-other.html') });
   if (u.pathname.endsWith('.jpg')) return route.fulfill({ contentType: 'image/png', body: png });
   return route.fulfill({ contentType: 'text/html', body: '<h1>home</h1>' });
 });
@@ -92,9 +93,44 @@ await p2.locator('.sku.big').waitFor({ timeout: 8000 });
 check((await p2.locator('.sku.big').textContent()) === '#0002', 'item page linked as #0002');
 await item.locator('.vai-badge').waitFor({ timeout: 5000 });
 check((await item.locator('.vai-badge').textContent()) === '#0002', 'SKU badge injected on item link');
+check((await p2.locator('.owner-bar').textContent()).includes('Mon annonce'), 'own listing detected (seller controls)');
+check(await p2.locator('[data-act=bought]').count() === 0, 'own listing → no "bought" action');
 await p2.locator('[data-k=notes]').fill('Bac B — taché manche gauche');
 await p2.locator('[data-act=save-link]').click();
+await p2.locator('.saved', { hasText: 'Enregistré' }).waitFor();
+// change the number from the panel
+await p2.locator('.sku-btn').click();
+await p2.locator('.sku-edit input').fill('9');
+await p2.locator('.sku-edit button[type=submit]').click();
+await p2.locator('.sku-btn .sku', { hasText: '#0009' }).waitFor({ timeout: 5000 });
+check(true, 'number changed to #0009 from the panel');
+await item.locator('.vai-badge', { hasText: '#0009' }).waitFor({ timeout: 5000 });
+check(true, 'badge follows the new number');
+await p2.locator('.sku-btn').click();
+await p2.locator('.sku-edit input').fill('1');
+await p2.locator('.sku-edit button[type=submit]').click();
+await p2.locator('.sku-msg', { hasText: 'déjà pris' }).waitFor({ timeout: 5000 });
+check(true, 'taken number → conflict message with swap');
+await p2.locator('.sku-msg [data-act=swap]').click();
+await p2.locator('.sku-btn .sku', { hasText: '#0001' }).waitFor({ timeout: 5000 });
+check(true, 'numbers swapped (#0009 ↔ #0001)');
 await item.screenshot({ path: `${shots}/3-item.png` });
+
+// someone else's listing → competitor menu
+const other = await ctx.newPage();
+other.on('pageerror', (e) => errors.push(e.message + ' @ ' + e.stack));
+await other.goto('https://www.vinted.fr/items/777-jean-levis');
+const p3 = other.locator('#vinted-ai-root');
+await p3.locator('.launcher').click();
+await p3.locator('.owner-bar').waitFor({ timeout: 8000 });
+check((await p3.locator('.owner-bar').textContent()).includes("Annonce d'un autre vendeur"), "other seller's listing detected");
+check(await p3.locator('[data-act=link]').count() === 0 && await p3.locator('[data-act=bought]').count() === 1, 'competitor menu (analyse + "ajouter comme achat")');
+check((await p3.locator('.card', { hasText: "Tu l'as acheté" }).textContent()).includes('#0002'), 'next free number (#0002) announced');
+await other.screenshot({ path: `${shots}/3b-other.png` });
+await p3.locator('[data-act=flip]').click();
+await p3.locator('.owner-bar.mine').waitFor({ timeout: 5000 });
+check(true, 'manual override "c\'est la mienne" switches the menu');
+await other.close();
 
 // 4. Dashboard
 const dash = await ctx.newPage();
@@ -102,7 +138,7 @@ dash.on('pageerror', (e) => errors.push(e.message + ' @ ' + e.stack));
 await sw.evaluate(async () => {
   const { library } = await chrome.storage.local.get('library');
   const day = 86400000;
-  library.forEach((i) => Object.assign(i, i.sku === '#0001' ? { status: 'sold', soldPrice: 26, cost: 6, soldAt: Date.now() - 3 * day, listedAt: Date.now() - 10 * day, brand: 'Nike' } : { status: 'listed', listedAt: Date.now() - 30 * day }));
+  library.forEach((i) => Object.assign(i, i.sku === '#0009' ? { status: 'sold', soldPrice: 26, cost: 6, soldAt: Date.now() - 3 * day, listedAt: Date.now() - 10 * day, brand: 'Nike' } : { status: 'listed', listedAt: Date.now() - 30 * day }));
   await chrome.storage.local.set({ library });
 });
 await dash.goto(`chrome-extension://${id}/dashboard/dashboard.html#overview`);
@@ -114,10 +150,25 @@ await dash.screenshot({ path: `${shots}/4-overview.png` });
 await dash.goto(`chrome-extension://${id}/dashboard/dashboard.html#library`);
 await dash.locator('#table tbody tr').first().waitFor();
 check(await dash.locator('#table tbody tr').count() === 2, 'library table lists 2 items');
-await dash.locator('#table tbody tr', { hasText: '#0002' }).click();
+await dash.locator('#table tbody tr', { hasText: '#0001' }).click();
 await dash.locator('#drawer.open').waitFor();
 check((await dash.locator('#f-notes').inputValue()).includes('Bac B'), 'notes persisted from Vinted panel');
 await dash.screenshot({ path: `${shots}/5-library.png` });
+// smart numbering: smallest free number
+const numbering = await dash.evaluate(async () => {
+  const st = await import('../lib/storage.js');
+  await st.saveSettings({ skuReuseSold: false });
+  const a = await st.createItem({ title: 'A' }); // #0001 listed, #0009 sold → #0002
+  const b = await st.createItem({ title: 'B' }); // → #0003
+  await st.deleteItem(a.id);
+  await st.deleteItem(b.id);
+  const c = await st.createItem({ title: 'C' }); // gap → #0002 again
+  await st.saveSettings({ skuReuseSold: true });
+  const d = await st.createItem({ title: 'D' }); // sold #0009 is free, but #0003 is lower → #0003
+  await st.deleteItem(c.id); await st.deleteItem(d.id);
+  return [a.sku, b.sku, c.sku, d.sku];
+});
+check(JSON.stringify(numbering) === '["#0002","#0003","#0002","#0003"]', `smallest free number reused ${JSON.stringify(numbering)}`);
 await dash.keyboard.press('Escape');
 await dash.goto(`chrome-extension://${id}/dashboard/dashboard.html#settings`);
 // (buttons trigger a host-permission prompt for custom URLs, which headless can't answer: call the same messages)

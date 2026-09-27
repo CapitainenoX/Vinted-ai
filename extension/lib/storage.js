@@ -52,7 +52,10 @@ export const DEFAULT_SETTINGS = {
   sellerProfile: '', // free text: style, niche, shipping habits… injected in the system prompt
   feePercent: 0, // seller fees kept for profit calc (Vinted charges buyers, so 0 by default)
   panelOpenOnForm: true,
-  nextSku: 1,
+  // Numbers of sold/archived items go back to the pool (their bag is free again).
+  skuReuseSold: true,
+  // Learned Vinted member id of the seller, used to recognise "my" listings.
+  myMemberId: null,
 };
 
 const K = { settings: 'settings', library: 'library', chats: 'chats' };
@@ -78,21 +81,47 @@ export async function saveSettings(patch) {
 export const STATUSES = { draft: 'Brouillon', listed: 'En vente', sold: 'Vendu', archived: 'Archivé' };
 
 export const formatSku = (n) => '#' + String(n).padStart(4, '0');
+export const skuNumber = (sku) => parseInt(String(sku ?? '').replace(/\D/g, ''), 10) || null;
+const isActive = (i) => i.status === 'draft' || i.status === 'listed';
+
+// A number is taken by any item still in the library — or only by active ones
+// (draft / listed) when sold numbers are reused.
+function takenNumbers(items, reuseSold, exceptId) {
+  const taken = new Set();
+  for (const i of items) if (i.id !== exceptId && (!reuseSold || isActive(i))) taken.add(skuNumber(i.sku));
+  return taken;
+}
+
+// Smallest free number: delete #0001 and #0002, the next item is #0001 again.
+export function nextFreeNumber(items, reuseSold = true) {
+  const taken = takenNumbers(items, reuseSold);
+  let n = 1;
+  while (taken.has(n)) n++;
+  return n;
+}
 
 export async function listItems() {
   return get(K.library, []);
 }
 
-export async function getItem(ref) {
-  const items = await listItems();
-  return items.find((i) => matchRef(i, ref)) || null;
+// Several items can share a number (a sold one and the active one that reused it):
+// resolve to the active item first, then the most recent.
+function findIndexByRef(items, ref) {
+  if (!ref) return -1;
+  const r = String(ref).trim();
+  const byId = items.findIndex((i) => i.id === r || (i.vintedId && String(i.vintedId) === r));
+  if (byId >= 0) return byId;
+  const n = /^#?\d{1,6}$/.test(r) ? skuNumber(r) : null;
+  if (n == null) return -1;
+  const matches = items.map((it, idx) => [it, idx]).filter(([it]) => skuNumber(it.sku) === n);
+  if (!matches.length) return -1;
+  matches.sort(([a], [b]) => (isActive(b) - isActive(a)) || (b.createdAt || 0) - (a.createdAt || 0));
+  return matches[0][1];
 }
 
-function matchRef(item, ref) {
-  if (!ref) return false;
-  const r = String(ref).trim();
-  const norm = r.startsWith('#') ? r : '#' + r.padStart(4, '0');
-  return item.id === r || item.sku === r || item.sku === norm || String(item.vintedId || '') === r;
+export async function getItem(ref) {
+  const items = await listItems();
+  return items[findIndexByRef(items, ref)] || null;
 }
 
 const ITEM_FIELDS = [
@@ -121,10 +150,11 @@ function clean(patch) {
 
 export async function createItem(data) {
   const settings = await getSettings();
+  const items = await listItems();
   const now = Date.now();
   const item = {
     id: crypto.randomUUID(),
-    sku: formatSku(settings.nextSku),
+    sku: formatSku(nextFreeNumber(items, settings.skuReuseSold)),
     status: 'draft',
     tags: [],
     photos: [],
@@ -135,16 +165,14 @@ export async function createItem(data) {
   };
   if (item.status === 'sold' && !item.soldAt) item.soldAt = now;
   if (item.status === 'listed' && !item.listedAt) item.listedAt = now;
-  const items = await listItems();
   items.unshift(item);
   await set(K.library, items);
-  await saveSettings({ nextSku: settings.nextSku + 1 });
   return item;
 }
 
 export async function updateItem(ref, patch) {
   const items = await listItems();
-  const idx = items.findIndex((i) => matchRef(i, ref));
+  const idx = findIndexByRef(items, ref);
   if (idx < 0) throw new Error(`Article introuvable : ${ref}`);
   const prev = items[idx];
   const next = { ...prev, ...clean(patch), updatedAt: Date.now() };
@@ -160,7 +188,38 @@ export async function updateItem(ref, patch) {
 
 export async function deleteItem(ref) {
   const items = await listItems();
-  await set(K.library, items.filter((i) => !matchRef(i, ref)));
+  const idx = findIndexByRef(items, ref);
+  if (idx >= 0) items.splice(idx, 1);
+  await set(K.library, items);
+}
+
+// Change an item's number. If another active item holds it: error, or swap numbers when asked.
+export async function setItemNumber(ref, number, { swap = false } = {}) {
+  const n = skuNumber(number);
+  if (!n || n > 99999) throw new Error('Numéro invalide (1 à 99999).');
+  const [items, settings] = await Promise.all([listItems(), getSettings()]);
+  const idx = findIndexByRef(items, ref);
+  if (idx < 0) throw new Error(`Article introuvable : ${ref}`);
+  const item = items[idx];
+  const holder = items.find((i) => i.id !== item.id && skuNumber(i.sku) === n && (!settings.skuReuseSold || isActive(i)));
+  if (holder && !swap) {
+    const err = new Error(`${formatSku(n)} est déjà pris par « ${holder.title || 'sans titre'} ».`);
+    err.code = 'SKU_TAKEN';
+    err.holder = { id: holder.id, sku: holder.sku, title: holder.title };
+    throw err;
+  }
+  const now = Date.now();
+  if (holder) {
+    holder.sku = item.sku;
+    holder.updatedAt = now;
+    holder.history = [...(holder.history || []), { at: now, event: 'renumbered', to: holder.sku }];
+  }
+  const from = item.sku;
+  item.sku = formatSku(n);
+  item.updatedAt = now;
+  item.history = [...(item.history || []), { at: now, event: 'renumbered', from, to: item.sku }];
+  await set(K.library, items);
+  return { item, swappedWith: holder ? { id: holder.id, sku: holder.sku } : null };
 }
 
 export async function searchItems({ query = '', status = '' } = {}) {
@@ -168,7 +227,7 @@ export async function searchItems({ query = '', status = '' } = {}) {
   return (await listItems()).filter((i) => {
     if (status && i.status !== status) return false;
     if (!q) return true;
-    return [i.sku, i.title, i.brand, i.size, i.notes, i.vintedId, (i.tags || []).join(' ')]
+    return [i.sku, skuNumber(i.sku), i.title, i.brand, i.size, i.notes, i.location, i.vintedId, (i.tags || []).join(' ')]
       .join(' ')
       .toLowerCase()
       .includes(q);
@@ -187,7 +246,7 @@ export async function saveChat(id, messages) {
 
 // ---------- export / import ----------
 export async function exportAll() {
-  const { apiKey, tavilyKey, ...safeSettings } = await getSettings(); // never export secrets
+  const { apiKey, tavilyKey, myMemberId, ...safeSettings } = await getSettings(); // never export secrets
   return { app: 'vinted-ai', version: 1, exportedAt: new Date().toISOString(), settings: safeSettings, library: await listItems() };
 }
 export async function importAll(data) {
@@ -197,9 +256,6 @@ export async function importAll(data) {
   for (const it of data.library) if (it && it.id && it.sku) byId.set(it.id, it);
   const merged = [...byId.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   await set(K.library, merged);
-  const maxSku = merged.reduce((m, i) => Math.max(m, parseInt(String(i.sku).slice(1), 10) || 0), 0);
-  const s = await getSettings();
-  if (s.nextSku <= maxSku) await saveSettings({ nextSku: maxSku + 1 });
   return merged.length;
 }
 

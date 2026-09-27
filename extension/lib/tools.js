@@ -57,6 +57,11 @@ export const TOOL_DEFS = [
     ref: str('Numéro (#0012) ou id'),
     patch: { type: 'object', description: 'Champs à modifier : title, description, price, cost, notes, status, soldPrice, buyer, location, tags…' },
   }, ['ref', 'patch']),
+  fn('library_set_number', 'Change le numéro (#XXXX) d\'un article. swap=true échange avec l\'article qui a déjà ce numéro.', {
+    ref: str('Numéro actuel (#0012) ou id'),
+    number: num('Nouveau numéro'),
+    swap: { type: 'boolean', description: 'Échanger si le numéro est déjà pris' },
+  }, ['ref', 'number']),
   fn('library_stats', 'Statistiques de ventes : CA, bénéfice, délai moyen de vente, top marques.'),
   fn('relist_item', 'Republie un article de la bibliothèque : ouvre un nouveau formulaire Vinted pré-rempli.', { ref: str('Numéro (#0012) ou id') }, ['ref']),
 ];
@@ -92,6 +97,11 @@ export async function runTool(name, args, ctx) {
       const item = await store.updateItem(args.ref, args.patch || {});
       ctx.emit({ type: 'library_changed' });
       return { ok: true, item: slim(item) };
+    }
+    case 'library_set_number': {
+      const r = await store.setItemNumber(args.ref, args.number, { swap: !!args.swap });
+      ctx.emit({ type: 'library_changed' });
+      return { ok: true, sku: r.item.sku, swappedWith: r.swappedWith };
     }
     case 'library_stats':
       return store.computeStats(await store.listItems(), ctx.settings.feePercent);

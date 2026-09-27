@@ -190,6 +190,57 @@
     };
   };
 
+  // ---------- is this item page MY listing? ----------
+  // Vinted shows different controls to the owner (edit / delete / bump / mark as reserved)
+  // than to a buyer (buy / make an offer / message). We score both, then fall back on the
+  // seller's member id learned from a page we already know is ours.
+  const OWNER_RE = /modifier l.annonce|supprimer|marquer comme (réservé|vendu)|booster|mettre en avant|edit listing|delete|mark as (reserved|sold)|bump|bearbeiten|editar|modifica/i;
+  const BUYER_RE = /^(acheter|faire une offre|envoyer un message|buy now|make an offer|message|kaufen|comprar|acquista)/i;
+
+  function sellerMemberId() {
+    const main = document.querySelector('main') || document.body;
+    for (const a of main.querySelectorAll('a[href*="/member/"]')) {
+      if (a.closest('header, nav, #' + PANEL_HOST)) continue;
+      const m = a.getAttribute('href').match(/\/member\/(\d+)/);
+      if (m) return m[1];
+    }
+    return null;
+  }
+
+  VAI.detectOwnership = async () => {
+    const id = VAI.currentItemId();
+    if (!id) return { own: false, reason: 'pas une fiche article', confident: false };
+    const { ownOverrides = {} } = await chrome.storage.local.get('ownOverrides');
+    if (id in ownOverrides) return { own: ownOverrides[id], reason: 'choix manuel', confident: true };
+
+    const linked = await VAI.send('library:get', { ref: id }).catch(() => null);
+    if (linked?.vintedId === id) return { own: true, reason: 'dans ta bibliothèque', confident: true, linked };
+
+    // Header/nav/footer hold site-wide links ("Messages", "Vendre"…): only look at the page body.
+    const controls = [...document.querySelectorAll('button, a[role="button"], a[href]')].filter((el) => notInPanel(el) && !el.closest('header, nav, footer'));
+    const editLink = document.querySelector(`a[href*="/items/${id}/edit"]`);
+    const ownerHit = editLink || controls.find((el) => OWNER_RE.test(el.textContent.trim()));
+    const buyerHit = controls.find((el) => BUYER_RE.test(el.textContent.trim()));
+    const seller = sellerMemberId();
+    const settings = await VAI.send('settings:get').catch(() => ({}));
+
+    if (ownerHit && !buyerHit) {
+      // Learn who "I" am, so the next pages can be recognised even if the buttons change.
+      if (seller && settings.myMemberId !== seller) VAI.send('settings:save', { patch: { myMemberId: seller } }).catch(() => {});
+      return { own: true, reason: 'boutons vendeur détectés', confident: true };
+    }
+    if (buyerHit && !ownerHit) return { own: false, reason: 'boutons acheteur détectés', confident: true };
+    if (seller && settings.myMemberId) return { own: seller === settings.myMemberId, reason: 'vendeur reconnu', confident: true };
+    return { own: false, reason: 'non déterminé', confident: false };
+  };
+
+  VAI.setOwnOverride = async (own) => {
+    const id = VAI.currentItemId();
+    const { ownOverrides = {} } = await chrome.storage.local.get('ownOverrides');
+    ownOverrides[id] = own;
+    await chrome.storage.local.set({ ownOverrides });
+  };
+
   // ---------- messages from the background (agent tools) ----------
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const run = {
@@ -197,7 +248,10 @@
         const type = VAI.pageType();
         const base = { pageType: type, url: location.href };
         if (type === 'form') return { ...base, form: VAI.readForm(), photos: pagePhotoUrls().length };
-        if (type === 'item') return { ...base, item: VAI.readItemPage(), photos: pagePhotoUrls().length };
+        if (type === 'item') {
+          const o = await VAI.detectOwnership();
+          return { ...base, isMyListing: o.own, ownershipReason: o.reason, item: VAI.readItemPage(), photos: pagePhotoUrls().length };
+        }
         return { ...base, title: document.title, text: document.body.innerText.slice(0, 3000) };
       },
       fill_form: async () => {
@@ -231,7 +285,8 @@
     if (!Object.keys(index).length) return;
     for (const a of document.querySelectorAll('a[href*="/items/"]:not([data-vai-badged])')) {
       a.setAttribute('data-vai-badged', '1');
-      const id = (a.getAttribute('href').match(/\/items\/(\d+)/) || [])[1];
+      // Only real listing links (/items/123-slug), not /items/123/edit, /items/new…
+      const id = (a.getAttribute('href').match(/\/items\/(\d+)(?:-[^/?#]*)?(?:[?#].*)?$/) || [])[1];
       const entry = id && index[id];
       if (!entry || !notInPanel(a)) continue;
       const b = document.createElement('span');

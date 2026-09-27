@@ -106,3 +106,10 @@ section { display: flex; flex-direction: column; gap: 16px; animation: vai-fade-
   main { padding: 16px; }
   .grid-2 { grid-template-columns: 1fr; }
 }
+
+.sku-btn { display: inline-flex; align-items: center; gap: 8px; border: 1px dashed transparent; background: none; padding: 2px 8px; margin-left: -8px; border-radius: var(--r-sm); color: var(--muted); cursor: pointer; font: inherit; transition: border-color var(--t-fast), color var(--t-fast); }
+.sku-btn:hover, .sku-btn:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+.sku-edit { display: flex; align-items: center; gap: 6px; }
+.sku-edit .sku { font-size: 22px; }
+.sku-edit .input { width: 90px; }
+.sku-msg { color: var(--warn); margin: 0 0 8px; }
