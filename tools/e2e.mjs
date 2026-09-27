@@ -4,6 +4,8 @@ import { createRequire } from 'node:module';
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+// Let ctx.route() see the extension service worker's own requests (svc-catalogue search).
+process.env.PW_EXPERIMENTAL_SERVICE_WORKER_NETWORK_EVENTS = '1';
 const require = createRequire(import.meta.url);
 let pw;
 try { pw = require('playwright'); } catch { pw = require(execSync('npm root -g').toString().trim() + '/playwright'); }
@@ -13,10 +15,11 @@ const shots = path.resolve(process.env.SHOTS || 'test-results');
 fs.mkdirSync(shots, { recursive: true });
 const fixture = (f) => fs.readFileSync(path.resolve('tools/fixtures', f), 'utf8');
 const png = fs.readFileSync(path.resolve('extension/icons/icon128.png'));
+// svc-catalogue shape (Sept 2026): brand/size/condition in item_box, relative url, photos[].
 const catalog = { items: [
-  { id: 1, title: 'Sweat Nike Club gris', price: { amount: '25.0', currency_code: 'EUR' }, brand_title: 'Nike', size_title: 'M', favourite_count: 12, path: '/items/1' },
-  { id: 2, title: 'Hoodie Nike M', price: { amount: '20.0' }, brand_title: 'Nike', favourite_count: 3, path: '/items/2' },
-  { id: 3, title: 'Sweat Nike vintage', price: '30.0', brand_title: 'Nike', favourite_count: 30, path: '/items/3' },
+  { id: 1, title: 'Sweat Nike Club gris', price: { amount: '25.0', currency_code: 'EUR' }, item_box: { first_line: 'Nike', second_line: 'M · Très bon état' }, favourite_count: 12, url: '/items/1-sweat' },
+  { id: 2, title: 'Hoodie Nike M', price: { amount: '20.0', currency_code: 'EUR' }, item_box: { first_line: 'Nike', second_line: 'M · Bon état' }, favourite_count: 3, url: '/items/2-hoodie' },
+  { id: 3, title: 'Sweat Nike vintage', price: { amount: '30.0', currency_code: 'EUR' }, item_box: { first_line: 'Nike' }, favourite_count: 30, url: '/items/3-sweat' },
 ], pagination: { total_entries: 3 } };
 
 const ctx = await pw.chromium.launchPersistentContext('', {
@@ -32,9 +35,16 @@ const id = sw.url().split('/')[2];
 for (let i = 0; i < 50 && !(await sw.evaluate(() => !!globalThis.chrome?.storage)); i++) await new Promise((r) => setTimeout(r, 100));
 await sw.evaluate(() => chrome.storage.local.set({ settings: { provider: 'custom', baseUrl: 'http://localhost:8787/v1', apiKey: 'test', chatModel: 'mock-chat', visionModel: 'mock-vision', vintedDomain: 'www.vinted.fr', panelOpenOnForm: true, nextSku: 1 } }));
 
+const catalogAuth = [];
+await ctx.route('https://api.vinted.fr/**', (route) => {
+  const u = new URL(route.request().url());
+  if (!u.pathname.startsWith('/svc-catalogue/items')) return route.fulfill({ status: 404, body: '' });
+  catalogAuth.push(route.request().headers().authorization || '');
+  return route.fulfill({ json: catalog, headers: { 'access-control-allow-origin': '*' } });
+});
+await ctx.addCookies([{ name: 'access_token_web', value: 'tok123', domain: '.www.vinted.fr', path: '/', secure: true, httpOnly: true }]);
 await ctx.route('https://www.vinted.fr/**', (route) => {
   const u = new URL(route.request().url());
-  if (u.pathname.startsWith('/api/v2/catalog/items')) return route.fulfill({ json: catalog });
   if (u.pathname === '/items/new') return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
   if (u.pathname.startsWith('/items/555')) return route.fulfill({ contentType: 'text/html', body: fixture('item.html') });
   if (u.pathname.startsWith('/items/777')) return route.fulfill({ contentType: 'text/html', body: fixture('item-other.html') });
@@ -58,6 +68,7 @@ await panel.locator('[data-act=generate]').click();
 await panel.locator('[data-k=title]').waitFor({ timeout: 15000 });
 check((await panel.locator('[data-k=title]').inputValue()).includes('Nike'), 'listing generated from photos');
 check((await panel.locator('.result').textContent()).includes('médiane'), 'market price stats shown');
+check(catalogAuth.length > 0 && catalogAuth.every((h) => h === 'Bearer tok123'), 'svc-catalogue called with access_token_web bearer');
 await page.screenshot({ path: `${shots}/1-generate.png` });
 await panel.locator('.result [data-act=apply]').click();
 await page.waitForFunction(() => document.getElementById('brand').dataset.picked, null, { timeout: 8000 }).catch(() => {});

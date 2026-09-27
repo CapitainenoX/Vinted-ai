@@ -71,6 +71,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // async response
 });
 
+// DuckDuckGo rejects requests carrying `Origin: chrome-extension://…` (403). Strip it for the worker's own requests.
+// Session rules survive worker restarts but not a browser restart, so (re)install them on every worker start.
+chrome.declarativeNetRequest
+  ?.updateSessionRules({
+    removeRuleIds: [1],
+    addRules: [
+      {
+        id: 1,
+        priority: 1,
+        action: { type: 'modifyHeaders', requestHeaders: [{ header: 'origin', operation: 'remove' }] },
+        condition: { requestDomains: ['html.duckduckgo.com', 'lite.duckduckgo.com'], tabIds: [-1], resourceTypes: ['xmlhttprequest'] },
+      },
+    ],
+  })
+  .catch((e) => console.warn('DNR rule failed', e));
+
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') chrome.tabs.create({ url: chrome.runtime.getURL('dashboard/dashboard.html#settings') });
 });

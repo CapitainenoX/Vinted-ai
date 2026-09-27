@@ -3,7 +3,7 @@
 
 import * as store from './storage.js';
 import { webSearch, fetchUrl } from './web.js';
-import { searchFromWorker, summarizeCatalog, catalogUrl } from './vinted-api.js';
+import { searchFromWorker } from './vinted-api.js';
 import { chatCompletion, parseJson } from './llm.js';
 import { VISION_PROMPT } from './prompts.js';
 
@@ -131,14 +131,9 @@ export async function findVintedTab(settings) {
 export async function searchVinted(args, ctx) {
   const domain = ctx.settings.vintedDomain;
   try {
-    const json = await askTab(ctx, { type: 'vinted_fetch', url: catalogUrl(domain, args) });
-    return trimSearch(summarizeCatalog(json, domain));
+    return trimSearch(await searchFromWorker(domain, args));
   } catch (e) {
-    try {
-      return trimSearch(await searchFromWorker(domain, args));
-    } catch (e2) {
-      throw new Error(`Recherche Vinted impossible (${e.message}). Utilise web_search avec "site:${domain}" en secours.`);
-    }
+    throw new Error(`Recherche Vinted impossible (${e.message}). Utilise web_search avec "site:${domain}" en secours.`);
   }
 }
 

@@ -19,10 +19,20 @@ export async function webSearch(query, settings, max = 6) {
     try {
       return await tavily(query, settings.tavilyKey, max);
     } catch (e) {
-      console.warn('Tavily failed, falling back to DuckDuckGo', e);
+      console.warn('Tavily failed, falling back to free search', e);
     }
   }
-  return duckduckgo(query, max);
+  const errors = [];
+  for (const engine of [duckduckgo, duckduckgoLite]) {
+    try {
+      const r = await engine(query, max);
+      if (r.results.length) return r;
+      errors.push(`${engine.name} : 0 résultat`);
+    } catch (e) {
+      errors.push(e.message);
+    }
+  }
+  throw new Error(`Recherche web indisponible (${errors.join(' ; ')}). Ajoute une clé Tavily gratuite dans Paramètres.`);
 }
 
 async function tavily(query, key, max) {
@@ -39,13 +49,12 @@ async function tavily(query, key, max) {
   };
 }
 
+// DuckDuckGo answers 403 to any request carrying `Origin: chrome-extension://…`;
+// background.js strips that header with a declarativeNetRequest session rule.
 async function duckduckgo(query, max) {
-  const res = await fetch('https://html.duckduckgo.com/html/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ q: query, kl: 'fr-fr' }),
-  });
-  if (!res.ok) throw new Error(`Recherche web indisponible (${res.status})`);
+  const params = new URLSearchParams({ q: query, kl: 'fr-fr' });
+  const res = await fetch(`https://html.duckduckgo.com/html/?${params}`, { credentials: 'omit' });
+  if (!res.ok) throw new Error(`DuckDuckGo ${res.status}`);
   const html = await res.text();
   const results = [];
   const blockRe = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>)?/g;
@@ -58,7 +67,26 @@ async function duckduckgo(query, max) {
     if (/duckduckgo\.com\/y\.js/.test(url)) continue; // ads
     results.push({ title: decode(m[2]), url, snippet: decode(m[3] || '') });
   }
-  if (!results.length && /anomaly|captcha/i.test(html)) throw new Error('DuckDuckGo demande un captcha : ajoute une clé Tavily (gratuite) dans Paramètres.');
+  if (!results.length && /anomaly|captcha/i.test(html)) throw new Error('DuckDuckGo captcha');
+  return { answer: null, results };
+}
+
+async function duckduckgoLite(query, max) {
+  const params = new URLSearchParams({ q: query, kl: 'fr-fr' });
+  const res = await fetch(`https://lite.duckduckgo.com/lite/?${params}`, { credentials: 'omit' });
+  if (!res.ok) throw new Error(`DuckDuckGo Lite ${res.status}`);
+  const html = await res.text();
+  const results = [];
+  const re = /<a[^>]+href="([^"]+)"[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:<td[^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>)?/g;
+  let m;
+  while ((m = re.exec(html)) && results.length < max) {
+    let url = m[1];
+    const uddg = url.match(/[?&]uddg=([^&]+)/);
+    if (uddg) url = decodeURIComponent(uddg[1]);
+    if (url.startsWith('//')) url = 'https:' + url;
+    if (!/^https?:/.test(url) || /duckduckgo\.com\/y\.js/.test(url)) continue;
+    results.push({ title: decode(m[2]), url, snippet: decode(m[3] || '') });
+  }
   return { answer: null, results };
 }
 
