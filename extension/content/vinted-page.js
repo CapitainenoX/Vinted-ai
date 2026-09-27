@@ -221,6 +221,78 @@
     };
   };
 
+  // ---------- inbox conversation: item, other member, messages ----------
+  VAI.currentConversationId = () => (location.pathname.match(/\/inbox\/(\d+)/) || [])[1] || null;
+
+  const MESSAGE_SEL = [
+    '[data-testid*="conversation-message"]', '[data-testid*="message-bubble"]', '[data-testid*="message-row"]',
+    '[class*="MessageBubble"]', '[class*="message-bubble"]', '[class*="Message__bubble"]', '[class*="message__body"]',
+  ];
+  const INPUT_SEL = ['[data-testid*="message-input"] textarea', 'textarea[name*="message" i]', 'textarea[placeholder]', '[contenteditable="true"][role="textbox"]'];
+
+  function conversationRoot() {
+    return document.querySelector('[data-testid*="conversation"]:not([data-testid*="list"]), [class*="Conversation__"], main') || document.body;
+  }
+
+  // Mine vs theirs: explicit markers first, then the bubble's side of the thread (sent messages sit on the right).
+  function messageAuthor(el, box) {
+    const marker = `${el.className} ${el.getAttribute('data-testid') || ''} ${el.parentElement?.className || ''}`.toLowerCase();
+    if (/\b(own|mine|sent|outgoing|right|is-current-user|me)\b/.test(marker)) return 'me';
+    if (/\b(their|received|incoming|left|other)\b/.test(marker)) return 'them';
+    const r = el.getBoundingClientRect();
+    if (!r.width || !box.width) return 'unknown';
+    return r.left + r.width / 2 > box.left + box.width / 2 ? 'me' : 'them';
+  }
+
+  VAI.readConversation = () => {
+    const root = conversationRoot();
+    const box = root.getBoundingClientRect();
+    const inPanel = (el) => el.closest('#' + PANEL_HOST);
+    // Item: the listing the conversation is about (header card / link).
+    const itemLink = [...root.querySelectorAll('a[href*="/items/"]')].find((a) => !inPanel(a) && /\/items\/\d+/.test(a.getAttribute('href')));
+    const itemId = itemLink?.getAttribute('href').match(/\/items\/(\d+)/)?.[1] || null;
+    const itemCard = itemLink?.closest('[data-testid*="item"], [class*="Item"], [class*="item"]') || itemLink;
+    const cardText = (itemCard?.innerText || '').split('\n').map((t) => t.trim()).filter(Boolean);
+    const priceLine = cardText.find((t) => /\d[\d\s.,]*\s?(€|eur|\$|£|zł|kč)/i.test(t));
+    const itemTitle = itemLink?.getAttribute('title') || itemLink?.querySelector('img')?.alt || cardText.find((t) => t !== priceLine && t.length > 3) || '';
+    // Other member: first profile link in the thread that isn't mine (header/nav excluded).
+    const member = [...root.querySelectorAll('a[href*="/member/"]')].find((a) => !inPanel(a) && !a.closest('header, nav'));
+    const memberLogin = (member?.innerText || member?.getAttribute('title') || '').trim().split('\n')[0] || (member?.getAttribute('href').match(/\/member\/\d+-([^/?#]+)/)?.[1] ?? '');
+    // Messages
+    let bubbles = [];
+    for (const sel of MESSAGE_SEL) {
+      bubbles = [...root.querySelectorAll(sel)].filter((el) => !inPanel(el) && el.innerText.trim());
+      if (bubbles.length) break;
+    }
+    // Keep the innermost matches only (selectors can match both a row and its bubble).
+    bubbles = bubbles.filter((el) => !bubbles.some((o) => o !== el && el.contains(o)));
+    const messages = bubbles.slice(-30).map((el) => ({ from: messageAuthor(el, box), text: el.innerText.trim().slice(0, 600) }));
+    return {
+      conversationId: VAI.currentConversationId(),
+      item: itemId ? { id: itemId, title: itemTitle.slice(0, 120), price: priceLine || '', url: `${location.origin}/items/${itemId}` } : null,
+      member: memberLogin ? { login: memberLogin.slice(0, 60), id: member.getAttribute('href').match(/\/member\/(\d+)/)?.[1] || null } : null,
+      messages,
+      // Fallback for unknown markup: the thread as plain text (the model can still follow it).
+      rawText: messages.length ? '' : (root.innerText || '').slice(-2500),
+    };
+  };
+
+  // Puts a draft in Vinted's message box. Never sends: the seller reads it and presses Send.
+  VAI.insertMessage = (text) => {
+    let el = null;
+    for (const sel of INPUT_SEL) {
+      el = [...document.querySelectorAll(sel)].find((e) => !e.closest('#' + PANEL_HOST));
+      if (el) break;
+    }
+    if (!el) return false;
+    el.focus();
+    if (el.isContentEditable) {
+      el.textContent = text;
+      el.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    } else setNativeValue(el, text);
+    return true;
+  };
+
   // ---------- is this item page MY listing? ----------
   // Vinted shows different controls to the owner (edit / delete / bump / mark as reserved)
   // than to a buyer (buy / make an offer / message). We score both, then fall back on the
@@ -283,6 +355,7 @@
           const o = await VAI.detectOwnership();
           return { ...base, isMyListing: o.own, ownershipReason: o.reason, item: VAI.readItemPage(), photos: pagePhotoUrls().length };
         }
+        if (type === 'inbox' && VAI.currentConversationId()) return { ...base, conversation: VAI.readConversation() };
         return { ...base, title: document.title, text: document.body.innerText.slice(0, 3000) };
       },
       fill_form: async () => {

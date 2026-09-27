@@ -23,6 +23,18 @@ http.createServer((req, res) => {
     let out;
     if (Array.isArray(last.content) && last.content.some((c) => c.type === 'image_url')) out = reply({ role: 'assistant', content: JSON.stringify(vision) });
     else if (text.includes('Audite cette annonce Vinted')) out = reply({ role: 'assistant', content: JSON.stringify(audit) });
+    else if (text.includes('Tu rédiges des messages Vinted')) {
+      // Echo what the prompt contained so the e2e can check the thread was read (and who said what).
+      const lastClient = [...text.matchAll(/CLIENT : (.*)/g)].at(-1)?.[1] || '';
+      const consigne = (text.match(/Consigne du vendeur[^:]*: (.*)/) || [])[1] || '';
+      const fav = text.includes('mis cet article en favori');
+      const kinds = fav ? ['offer', 'follow_up', 'bundle'] : ['reply', 'follow_up', 'offer'];
+      out = reply({ role: 'assistant', content: JSON.stringify({
+        summary: fav ? 'Article en favori' : `Dernier message client : ${lastClient}`,
+        buyer_intent: `vendeur-lu:${/VENDEUR \(moi\) : Oui toujours/.test(text)}`,
+        replies: kinds.map((k, i) => ({ kind: k, label: `Option ${i + 1}`, text: `${consigne ? `[${consigne}] ` : ''}Bonjour julie_b, message ${k}.`, price: k === 'offer' ? 19 : null })),
+      }) });
+    }
     else if (text.includes("Rédige l'annonce Vinted optimale")) out = reply({ role: 'assistant', content: '```json\n' + JSON.stringify(listing) + '\n```' });
     else if (b.tools) {
       const toolMsgs = b.messages.filter((m) => m.role === 'tool').length;

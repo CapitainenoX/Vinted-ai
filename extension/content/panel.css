@@ -106,3 +106,14 @@ header { display: flex; align-items: center; justify-content: space-between; pad
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 .toast .sku { color: inherit; }
 @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+
+/* messages studio (inbox + favourites) */
+.studio .suggestions { display: flex; flex-direction: column; gap: 10px; margin: 8px 0 12px; }
+.suggestion { border: 1px solid var(--border); border-radius: var(--r-md); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.suggestion .textarea { resize: vertical; min-height: 64px; }
+.suggestion .actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.studio .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 8px; }
+.chip-btn { border: 1px solid var(--border); background: var(--surface); color: var(--text); border-radius: 999px; padding: 4px 10px; font: 500 12px/1.2 var(--font); cursor: pointer; transition: border-color var(--t-fast), color var(--t-fast); }
+.chip-btn:hover, .chip-btn:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+.conv-head p { margin: 4px 0 0; }
+.conv-head a { color: var(--accent); }

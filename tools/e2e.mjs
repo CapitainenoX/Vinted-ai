@@ -49,6 +49,7 @@ await ctx.route('https://www.vinted.fr/**', (route) => {
   const u = new URL(route.request().url());
   if (u.pathname === '/items/new') return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
   if (/^\/items\/\d+[^/]*\/edit/.test(u.pathname)) return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
+  if (u.pathname.startsWith('/inbox/')) return route.fulfill({ contentType: 'text/html', body: fixture('inbox.html') });
   if (u.pathname.startsWith('/items/888')) return route.fulfill({ contentType: 'text/html', body: '<meta charset="utf-8"><h1>Veste Zara en jean bleue L</h1><p>18,50 €</p>' });
   if (u.pathname.startsWith('/items/555')) return route.fulfill({ contentType: 'text/html', body: fixture('item.html') });
   if (u.pathname.startsWith('/items/777')) return route.fulfill({ contentType: 'text/html', body: fixture('item-other.html') });
@@ -187,6 +188,39 @@ await p3.locator('[data-act=flip]').click();
 await p3.locator('.owner-bar.mine').waitFor({ timeout: 5000 });
 check(true, 'manual override "c\'est la mienne" switches the menu');
 await other.close();
+
+// Inbox: detect item + client, 3 messages, insert into Vinted's box, adapt to an instruction
+const inbox = await ctx.newPage();
+inbox.on('pageerror', (e) => errors.push(e.message + ' @ ' + e.stack));
+await inbox.goto('https://www.vinted.fr/inbox/12345');
+const p4 = inbox.locator('#vinted-ai-root');
+await p4.locator('.launcher').click();
+check((await p4.locator('[data-tab=listing]').textContent()).includes('Messages'), 'inbox → "Messages" tab');
+await p4.locator('.suggestion').nth(2).waitFor({ timeout: 15000 });
+const head = await p4.locator('.conv-head').textContent();
+check(head.includes('@julie_b') && head.includes('Sweat Nike gris') && head.includes('3 message(s)'), `conversation read: client, item, messages (${head.replace(/\s+/g, ' ').trim().slice(0, 80)})`);
+const summary = await p4.locator('.studio-summary').textContent();
+check(summary.includes('Vous le feriez à 15 €') && summary.includes('vendeur-lu:true'), 'thread sent with who-said-what (client vs me)');
+check((await p4.locator('.studio-state .sku').textContent()) === '#0001', 'conversation item matched to library number');
+check(await p4.locator('.suggestion').count() === 3, '3 messages proposed (reply / follow-up / offer)');
+await p4.locator('.suggestion').first().locator('[data-act=insert]').click();
+const boxText = await inbox.locator('[data-testid=message-input] textarea').inputValue();
+check(boxText === 'Bonjour julie_b, message reply.', 'message put in Vinted\'s reply box (not sent)');
+await p4.locator('[data-q="Refuse poliment"]').click();
+await p4.locator('.suggestion textarea', { hasText: '[Refuse poliment]' }).first().waitFor({ timeout: 15000 });
+check(true, 'instruction adapts the 3 messages');
+await inbox.screenshot({ path: `${shots}/3d-inbox.png` });
+await inbox.close();
+// Favourites on my own listing
+const fav = await ctx.newPage();
+fav.on('pageerror', (e) => errors.push(e.message + ' @ ' + e.stack));
+await fav.goto('https://www.vinted.fr/items/555-sweat-nike');
+const p5 = fav.locator('#vinted-ai-root');
+await p5.locator('.launcher').click();
+await p5.locator('[data-act=favorites]').click();
+await p5.locator('.suggestion').nth(2).waitFor({ timeout: 15000 });
+check((await p5.locator('.suggestion .chip').allTextContents()).join(',') === 'Offre,Relancer,Lot', 'favourites → offer / follow-up / bundle messages');
+await fav.close();
 
 // 4. Dashboard
 const dash = await ctx.newPage();

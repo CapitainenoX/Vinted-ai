@@ -2,7 +2,7 @@
 
 import * as store from './lib/storage.js';
 import { chatCompletion, listModels, parseJson } from './lib/llm.js';
-import { agentSystemPrompt, listingPrompt, auditPrompt } from './lib/prompts.js';
+import { agentSystemPrompt, listingPrompt, auditPrompt, messagesPrompt } from './lib/prompts.js';
 import { TOOL_DEFS, runTool, searchVinted, analyzePhotos, askTab } from './lib/tools.js';
 
 const MAX_STEPS = 8;
@@ -63,6 +63,7 @@ const handlers = {
   'chat:get': ({ id }) => store.getChat(id),
   'chat:clear': ({ id }) => store.saveChat(id, []),
 
+  'messages:suggest': (msg) => suggestMessages(msg),
   'listing:generate': (msg, sender) => generateListing(msg, sender.tab?.id),
   'listing:audit': (msg, sender) => auditListing(msg, sender.tab?.id),
   'photos:fetch': ({ urls }) => Promise.all(urls.map(fetchAsDataUrl)),
@@ -312,6 +313,32 @@ async function auditListing({ form }, tabId) {
     maxTokens: 2000,
   });
   return { audit: parseJson(message.content), comps: comps && { count: comps.count, stats: comps.stats } };
+}
+
+// 3 ready-to-send messages for a conversation (reply / follow-up / offer) or for an item's favourites.
+async function suggestMessages({ mode = 'reply', conversation = null, item = null, instruction = '' }) {
+  const settings = await store.getSettings();
+  const target = item || conversation?.item || null;
+  const libItem = target?.id ? (await store.listItems()).find((i) => String(i.vintedId) === String(target.id)) || null : null;
+  const { message } = await chatCompletion(settings, {
+    model: settings.chatModel,
+    messages: [{ role: 'user', content: messagesPrompt({ mode, conversation, item: target, libItem, instruction: String(instruction || '').slice(0, 500), settings }) }],
+    json: true,
+    temperature: 0.7,
+    maxTokens: 1400,
+  });
+  const out = parseJson(message.content);
+  const replies = (Array.isArray(out.replies) ? out.replies : [])
+    .filter((r) => r?.text)
+    .slice(0, 3)
+    .map((r) => ({
+      kind: String(r.kind || 'custom'),
+      label: String(r.label || 'Message').slice(0, 40),
+      text: String(r.text).slice(0, 1500),
+      price: r.price != null && Number.isFinite(+r.price) ? +r.price : null,
+    }));
+  if (!replies.length) throw new Error("Le modèle n'a pas proposé de message. Réessaie.");
+  return { summary: out.summary || '', intent: out.buyer_intent || null, replies, libItem: libItem && { sku: libItem.sku, id: libItem.id, status: libItem.status } };
 }
 
 async function fetchAsDataUrl(url) {

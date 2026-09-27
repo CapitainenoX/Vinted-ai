@@ -78,6 +78,10 @@
   function pageContext() {
     const t = VAI.pageType();
     if (t === 'form') return `formulaire de création/édition d'annonce (${location.pathname})`;
+    if (t === 'inbox' && VAI.currentConversationId()) {
+      const c = VAI.readConversation();
+      return `conversation Vinted${c.member?.login ? ` avec @${c.member.login}` : ''}${c.item ? ` à propos de "${c.item.title}" (article ${c.item.id})` : ''} — utilise read_page pour lire les messages`;
+    }
     if (t === 'item') return `fiche article ${VAI.currentItemId()} (${location.pathname}) — ${ownership?.own ? "c'est l'annonce du vendeur (la sienne)" : "annonce d'un autre vendeur"}`;
     return `${PAGE_LABEL[t]} (${location.pathname})`;
   }
@@ -96,7 +100,9 @@
             ? ownership?.own
               ? ['Optimise mon annonce', 'Comment la faire remonter ?', 'Mon prix est-il bon ?']
               : ['Bonne affaire à revendre ?', 'Que fait-il mieux que moi ?', 'Prix du marché pour cet article']
-            : ['Mes stats de ventes', 'Quelles marques se vendent le mieux ?', 'Mes articles en vente depuis longtemps'],
+            : VAI.pageType() === 'inbox'
+              ? ['Propose 3 réponses à ce client', 'Ce client est-il sérieux ?', 'Quelle offre accepter ?']
+              : ['Mes stats de ventes', 'Quelles marques se vendent le mieux ?', 'Mes articles en vente depuis longtemps'],
     });
     $('[data-view=chat]').addEventListener('library-changed', () => VAI.refreshIndex());
   }
@@ -176,6 +182,7 @@
     const view = $('[data-view=listing]');
     const type = VAI.pageType();
     if (type === 'item') return renderItemPage(view);
+    if (type === 'inbox') return renderInbox(view);
     if (type !== 'form') {
       view.innerHTML = `<div class="pad"><div class="card">
         <p><strong>Ouvre "Vendre"</strong> pour générer une annonce depuis tes photos, ou une fiche article pour l'auditer.</p>
@@ -465,6 +472,7 @@
           <button class="btn sm" data-act="audit">${icon('target', 12)} Optimiser (audit)</button>
           <button class="btn sm" data-ask="Ma annonce stagne : comment la faire remonter ? Donne un plan concret (baisse de prix, republication, photos, titre, horaire).">${icon('refresh', 12)} Faire remonter</button>
           <button class="btn sm" data-ask="Mon prix est-il bien placé face aux annonces comparables ? Donne le prix pour vendre en 7 jours.">${icon('tag', 12)} Vérifier mon prix</button>
+          <button class="btn sm" data-act="favorites">${icon('chat', 12)} Messages aux favoris</button>
           ${linked ? `<button class="btn sm" data-act="relist">${icon('plus', 12)} Republier</button>` : ''}
           <a class="btn sm ghost" href="${esc(location.origin)}/items/${esc(id)}/edit">${icon('external', 12)} Modifier sur Vinted</a>
         </div>
@@ -524,12 +532,122 @@
       VAI.refreshIndex();
     });
     view.querySelector('[data-act=relist]')?.addEventListener('click', () => send('relist', { ref: linked.id }));
+    view.querySelector('[data-act=favorites]')?.addEventListener('click', (e) =>
+      busy(e.currentTarget, () =>
+        messageStudio(view.querySelector('.result'), {
+          mode: 'favorites',
+          item: { id, title: info.title, price: info.price },
+          title: 'Messages aux favoris',
+          hint: 'Sur Vinted : ouvre l’article → « Favoris » ou l’offre aux intéressés, puis colle le message.',
+        }),
+      ),
+    );
     view.querySelector('[data-act=audit]').onclick = (e) =>
       audit(e.currentTarget, view, { title: info.title, description: info.description, price: info.price, ...info.details, isMyListing: own });
     view.querySelectorAll('[data-ask]').forEach((b) => (b.onclick = () => {
       show('chat');
       chat.submit(b.dataset.ask);
     }));
+  }
+
+  // ---------- messages: 3 suggestions for a conversation or an item's favourites ----------
+  const REPLY_KIND = { reply: 'Répondre', follow_up: 'Relancer', offer: 'Offre', bundle: 'Lot', custom: 'Message' };
+  const QUICK_ASKS = ["Accepte l'offre", 'Contre-offre raisonnable', 'Refuse poliment', "Dis que j'envoie demain", 'Propose un lot'];
+  const suggestionCache = new Map(); // conversation + last message → result (no new tokens when reopening)
+
+  // Renders the instruction box + 3 editable drafts into `el`. opts: { mode, conversation?, item?, title, hint? }
+  async function messageStudio(el, opts, { auto = true } = {}) {
+    el.innerHTML = `<div class="card studio fade-up">
+      <div class="row-between"><strong>${esc(opts.title)}</strong><span class="small muted studio-state"></span></div>
+      <p class="small muted studio-summary"></p>
+      <span class="label">Ce que tu veux dire (optionnel)</span>
+      <textarea class="textarea instruction" rows="2" placeholder="Ex : accepte 18 €, envoi demain, reste ferme sur le prix…"></textarea>
+      <div class="chips">${(opts.mode === 'favorites' ? ['-15 % pour 48 h', 'Relance courte', 'Lot -20 %'] : QUICK_ASKS).map((q) => `<button class="chip-btn" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div>
+      <div class="actions"><button class="btn primary sm" data-act="gen">${icon('sparkles', 12)} Proposer 3 messages</button></div>
+      <div class="suggestions"></div>
+      ${opts.hint ? `<p class="small muted">${esc(opts.hint)}</p>` : ''}
+    </div>`;
+    const box = el.querySelector('.studio');
+    const instr = box.querySelector('.instruction');
+    const list = box.querySelector('.suggestions');
+    const canInsert = VAI.pageType() === 'inbox';
+    const draw = (res) => {
+      box.querySelector('.studio-summary').textContent = [res.summary, res.intent && `Client : ${res.intent}`].filter(Boolean).join(' · ');
+      box.querySelector('.studio-state').innerHTML = res.libItem ? `<span class="sku">${esc(res.libItem.sku)}</span>` : '';
+      list.innerHTML = res.replies
+        .map(
+          (r, i) => `<div class="suggestion" data-i="${i}">
+            <div class="row-between"><span class="chip ${r.kind === 'offer' ? 'accent' : ''}">${esc(REPLY_KIND[r.kind] || 'Message')}</span><span class="small muted">${esc(r.label)}${r.price != null ? ` · <span class="num">${esc(r.price)} €</span>` : ''}</span></div>
+            <textarea class="textarea" rows="3" aria-label="Message ${i + 1}">${esc(r.text)}</textarea>
+            <div class="actions">
+              ${canInsert ? `<button class="btn primary sm" data-act="insert">${icon('send', 12)} Mettre dans la réponse</button>` : ''}
+              <button class="btn sm ${canInsert ? 'ghost' : 'primary'}" data-act="copy">${icon('copy', 12)} Copier</button>
+              <span class="small muted done"></span>
+            </div>
+          </div>`,
+        )
+        .join('');
+      list.querySelectorAll('.suggestion').forEach((sEl) => {
+        const text = () => sEl.querySelector('textarea').value;
+        const done = (t) => (sEl.querySelector('.done').textContent = t);
+        sEl.querySelector('[data-act=insert]')?.addEventListener('click', () =>
+          done(VAI.insertMessage(text()) ? 'Dans la zone de message ✓ — relis puis envoie' : 'Zone de message introuvable : utilise Copier'),
+        );
+        sEl.querySelector('[data-act=copy]').onclick = async () => {
+          await navigator.clipboard.writeText(text());
+          done('Copié ✓');
+        };
+      });
+    };
+    const generate = async (btn) => {
+      const instruction = instr.value.trim();
+      // Re-read the thread: new messages may have arrived since the panel opened.
+      const conversation = opts.mode === 'reply' ? VAI.readConversation() : null;
+      const key = `${opts.mode}|${conversation?.conversationId || opts.item?.id}|${conversation?.messages.at(-1)?.text || ''}|${instruction}`;
+      const run = async () => {
+        const res = suggestionCache.get(key) || (await send('messages:suggest', { mode: opts.mode, conversation, item: opts.item || null, instruction }));
+        suggestionCache.set(key, res);
+        draw(res);
+      };
+      list.innerHTML = '<p class="small muted"><span class="spinner"></span> Rédaction de 3 messages…</p>';
+      try {
+        await (btn ? busy(btn, run) : run());
+      } catch (e) {
+        list.innerHTML = errorCard(e.message);
+      }
+    };
+    box.querySelector('[data-act=gen]').onclick = (e) => generate(e.currentTarget);
+    box.querySelectorAll('[data-q]').forEach((b) => (b.onclick = () => {
+      instr.value = b.dataset.q;
+      generate(box.querySelector('[data-act=gen]'));
+    }));
+    instr.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        generate(box.querySelector('[data-act=gen]'));
+      }
+    });
+    if (auto) await generate();
+  }
+
+  async function renderInbox(view) {
+    if (!VAI.currentConversationId()) {
+      view.innerHTML = `<div class="pad"><div class="card"><strong>Ouvre une conversation</strong>
+        <p class="small muted">Je détecte l'article et le client, et je te propose 3 messages : réponse, relance, offre.</p></div></div>`;
+      return;
+    }
+    const conv = VAI.readConversation();
+    view.innerHTML = `<div class="pad stack">
+      <div class="card conv-head">
+        <div class="row-between"><strong>${conv.member?.login ? `@${esc(conv.member.login)}` : 'Conversation'}</strong>
+          <button class="btn ghost sm" data-act="reread" title="Relire la conversation">${icon('refresh', 12)} Relire</button></div>
+        ${conv.item ? `<p class="small">${icon('tag', 12)} <a href="${esc(conv.item.url)}">${esc(conv.item.title || 'Article ' + conv.item.id)}</a>${conv.item.price ? ` · <span class="num">${esc(conv.item.price)}</span>` : ''}</p>` : '<p class="small muted">Article non détecté dans la conversation.</p>'}
+        <p class="small muted">${conv.messages.length ? `${conv.messages.length} message(s) lu(s)` : 'Messages lus en texte brut'}${conv.messages.at(-1) ? ` · dernier : ${conv.messages.at(-1).from === 'me' ? 'toi' : 'le client'}` : ''}</p>
+      </div>
+      <div class="studio-host"></div>
+    </div>`;
+    view.querySelector('[data-act=reread]').onclick = () => renderInbox(view);
+    await messageStudio(view.querySelector('.studio-host'), { mode: 'reply', title: '3 messages pour ce client' });
   }
 
   // ---------- library tab ----------
@@ -696,6 +814,8 @@
   // ---------- page-aware boot ----------
   function updatePageChip() {
     $('.page-chip').textContent = PAGE_LABEL[VAI.pageType()];
+    const inbox = VAI.pageType() === 'inbox';
+    $('[data-tab=listing]').innerHTML = `${icon(inbox ? 'chat' : 'wand', 14)} ${inbox ? 'Messages' : 'Annonce'}`;
   }
   updatePageChip();
 
