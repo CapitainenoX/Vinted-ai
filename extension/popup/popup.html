@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Vinted AI</title>
+  <link rel="stylesheet" href="../shared/tokens.css">
+  <style>
+    body { margin: 0; width: 280px; padding: 14px; background: var(--bg); color: var(--text); font: 13px/1.45 var(--font); }
+    .top { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; margin-bottom: 12px; }
+    .top svg { color: var(--accent); }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 12px; }
+    .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px; }
+    .stat b { display: block; font-size: 16px; font-variant-numeric: tabular-nums; }
+    .stat span { font-size: 11px; color: var(--muted); }
+    .col { display: flex; flex-direction: column; gap: 6px; }
+    .col .btn { width: 100%; }
+    .warn { font-size: 12px; color: var(--warn); margin: 0 0 10px; }
+  </style>
+</head>
+<body>
+  <div class="top" id="top"></div>
+  <p class="warn" id="warn" hidden>Aucune clé API configurée.</p>
+  <div class="stats" id="stats"></div>
+  <div class="col">
+    <button class="btn primary" id="sell">Nouvelle annonce sur Vinted</button>
+    <button class="btn" id="dash">Ouvrir le dashboard</button>
+  </div>
+  <script src="../shared/icons.js"></script>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

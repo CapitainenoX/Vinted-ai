@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Vendre — mock Vinted</title></head>
+<body style="font-family:sans-serif;padding:20px;max-width:600px">
+<form>
+  <div data-testid="photo-uploader"><input type="file" multiple accept="image/*"><img id="p1" width="200" height="200"></div>
+  <label for="title">Titre</label><input id="title" name="title"><br>
+  <label for="description">Décris ton article</label><textarea id="description"></textarea><br>
+  <label for="brand">Marque</label><input id="brand" name="brand" autocomplete="off">
+  <ul role="listbox" id="brand-list" hidden><li role="option">Adidas</li><li role="option">Nike</li><li role="option">Nike ACG</li></ul><br>
+  <label for="price">Prix</label><input id="price" name="price"><br>
+</form>
+<script>
+  // Fake photo: a canvas-drawn JPEG exposed as a blob: URL, like Vinted's uploader preview.
+  const c = document.createElement('canvas'); c.width = c.height = 300;
+  const g = c.getContext('2d'); g.fillStyle = '#888'; g.fillRect(0,0,300,300); g.fillStyle = '#fff'; g.font = '40px sans-serif'; g.fillText('NIKE', 90, 160);
+  c.toBlob((b) => (document.getElementById('p1').src = URL.createObjectURL(b)), 'image/jpeg');
+  const brand = document.getElementById('brand'), list = document.getElementById('brand-list');
+  brand.addEventListener('click', () => (list.hidden = false));
+  list.querySelectorAll('li').forEach((li) => li.addEventListener('click', () => { brand.value = li.textContent; brand.dataset.picked = li.textContent; list.hidden = true; }));
+  window.reactLike = {}; ['title','description','price'].forEach((id) => document.getElementById(id).addEventListener('input', (e) => (window.reactLike[id] = e.target.value)));
+</script></body></html>

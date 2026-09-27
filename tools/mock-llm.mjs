@@ -1,0 +1,36 @@
+// Mock OpenAI-compatible server for end-to-end tests (no API key needed).
+import http from 'node:http';
+
+const vision = { item_type: 'sweat à capuche', brand: 'Nike', brand_evidence: 'logo brodé', model: 'Club', size_label: 'M', gender: 'homme', colors: ['gris'], material: 'coton (probable)', condition_guess: 'Très bon état', defects: [], labels_text: 'NIKE M', photo_feedback: ['Ajoute une photo de l’étiquette'], search_query: 'sweat nike club' };
+const listing = { title: 'Sweat à capuche Nike Club gris M', description: 'Sweat Nike Club gris, taille M.\n\nTrès bon état, aucun défaut.\n\n#nike #sweat #hoodie', brand: 'Nike', size: 'M', condition: 'Très bon état', color: 'Gris', material: 'Coton', category: 'Hommes > Vêtements > Sweats', price: 24, price_fast: 19, price_max: 29, price_reasoning: 'Médiane 25 € sur 3 annonces', tags: ['nike', 'hoodie'], missing: ['mesures'], score: 84, tips: ['Publie le dimanche soir'] };
+const audit = { score: 62, verdict: 'Titre trop vague.', price_position: 'dans le marché', missing: ['taille dans le titre'], improvements: [{ field: 'title', issue: 'pas de marque', fix: 'Sweat Nike Club gris M' }], better_title: 'Sweat Nike Club gris M', keywords_to_add: ['hoodie'] };
+
+let calls = 0;
+const reply = (message) => ({ choices: [{ message }], usage: {} });
+const call = (name, args) => ({ role: 'assistant', content: '', tool_calls: [{ id: 'c' + ++calls, type: 'function', function: { name, arguments: JSON.stringify(args) } }] });
+
+http.createServer((req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  if (req.method === 'OPTIONS') return res.end();
+  if (req.url.endsWith('/models')) return res.end(JSON.stringify({ data: [{ id: 'mock-chat' }, { id: 'mock-vision' }] }));
+  let body = '';
+  req.on('data', (c) => (body += c));
+  req.on('end', () => {
+    const b = JSON.parse(body);
+    const last = b.messages.at(-1);
+    const text = typeof last.content === 'string' ? last.content : JSON.stringify(last.content);
+    let out;
+    if (Array.isArray(last.content) && last.content.some((c) => c.type === 'image_url')) out = reply({ role: 'assistant', content: JSON.stringify(vision) });
+    else if (text.includes('Audite cette annonce Vinted')) out = reply({ role: 'assistant', content: JSON.stringify(audit) });
+    else if (text.includes("Rédige l'annonce Vinted optimale")) out = reply({ role: 'assistant', content: '```json\n' + JSON.stringify(listing) + '\n```' });
+    else if (b.tools) {
+      const toolMsgs = b.messages.filter((m) => m.role === 'tool').length;
+      if (last.role === 'user') out = reply(call('search_vinted', { query: 'sweat nike club' }));
+      else if (toolMsgs === 1) out = reply(call('propose_listing', { title: listing.title, description: listing.description, price: 24, brand: 'Nike', size: 'M' }));
+      else out = reply({ role: 'assistant', content: '## Prix conseillé\n- **24 €** (médiane du marché)\n- Rapide : 19 €' });
+    } else out = reply({ role: 'assistant', content: 'OK' });
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify(out));
+  });
+}).listen(8787, () => console.log('mock llm on 8787'));

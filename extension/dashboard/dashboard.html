@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vinted AI — Dashboard</title>
+  <link rel="icon" href="../icons/icon48.png">
+  <link rel="stylesheet" href="../shared/tokens.css">
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <aside class="side">
+    <div class="logo"><span class="logo-mark" data-icon="sparkles"></span> Vinted AI</div>
+    <nav>
+      <a href="#overview" data-route="overview"><span data-icon="chart"></span> Vue d'ensemble</a>
+      <a href="#library" data-route="library"><span data-icon="book"></span> Bibliothèque</a>
+      <a href="#agent" data-route="agent"><span data-icon="chat"></span> Agent</a>
+      <a href="#settings" data-route="settings"><span data-icon="settings"></span> Paramètres</a>
+    </nav>
+    <button class="btn ghost theme-toggle" id="theme">Thème</button>
+  </aside>
+
+  <main>
+    <!-- Overview -->
+    <section data-page="overview">
+      <div class="page-head"><h1>Vue d'ensemble</h1><div class="head-actions"><select class="select" id="range" aria-label="Période"><option value="30">30 jours</option><option value="90" selected>90 jours</option><option value="365">12 mois</option><option value="0">Tout</option></select></div></div>
+      <div class="setup card" id="setup-banner" hidden>
+        <strong>Ajoute ta clé API pour activer l'agent.</strong>
+        <span class="muted">Groq est gratuit et très rapide.</span>
+        <a class="btn primary sm" href="#settings">Configurer</a>
+      </div>
+      <div class="kpis" id="kpis"></div>
+      <div class="grid-2">
+        <div class="card"><div class="card-head"><h2>Ventes par semaine</h2><span class="muted small" id="chart-total"></span></div><div id="chart"></div></div>
+        <div class="card"><div class="card-head"><h2>Top marques (CA)</h2></div><div id="brands"></div></div>
+      </div>
+      <div class="card"><div class="card-head"><h2>À relancer</h2><span class="muted small">En vente depuis plus de 21 jours — republie ou baisse le prix de 10 %+ (notifie les favoris).</span></div><div id="stale"></div></div>
+    </section>
+
+    <!-- Library -->
+    <section data-page="library" hidden>
+      <div class="page-head"><h1>Bibliothèque</h1>
+        <div class="head-actions">
+          <button class="btn" id="export-csv"><span data-icon="download"></span> CSV</button>
+          <button class="btn" id="export-json"><span data-icon="download"></span> Sauvegarde</button>
+          <label class="btn"><span data-icon="upload"></span> Importer<input type="file" accept="application/json" id="import" hidden></label>
+          <button class="btn primary" id="new-item"><span data-icon="plus"></span> Nouvel article</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="search"><span data-icon="search"></span><input class="input" id="q" placeholder="Rechercher : #0012, titre, marque, note, emplacement…"></div>
+        <div class="seg" id="status-filter">
+          <button data-s="" class="on">Tous</button><button data-s="draft">Brouillons</button><button data-s="listed">En vente</button><button data-s="sold">Vendus</button><button data-s="archived">Archivés</button>
+        </div>
+      </div>
+      <div class="card table-card"><table class="table" id="table"><thead><tr>
+        <th></th><th data-sort="sku">N°</th><th data-sort="title">Article</th><th data-sort="status">Statut</th><th data-sort="price" class="r">Prix</th><th data-sort="cost" class="r">Coût</th><th data-sort="soldPrice" class="r">Vendu</th><th class="r">Marge</th><th data-sort="updatedAt" class="r">Modifié</th>
+      </tr></thead><tbody></tbody></table><p class="empty muted" id="empty" hidden>Aucun article. Génère une annonce sur Vinted puis clique « Bibliothèque », ou crée-en un ici.</p></div>
+    </section>
+
+    <!-- Agent -->
+    <section data-page="agent" hidden class="agent-page">
+      <div class="page-head"><h1>Agent</h1><div class="head-actions"><button class="btn" id="chat-clear"><span data-icon="refresh"></span> Nouvelle conversation</button></div></div>
+      <div class="card chat-card" id="chat-root"></div>
+    </section>
+
+    <!-- Settings -->
+    <section data-page="settings" hidden>
+      <div class="page-head"><h1>Paramètres</h1></div>
+      <form class="card settings" id="settings-form" autocomplete="off">
+        <h2>Modèle IA</h2>
+        <div class="grid-2">
+          <div><label class="label" for="provider">Fournisseur</label><select class="select" id="provider" name="provider"></select></div>
+          <div><label class="label" for="baseUrl">URL de l'API</label><input class="input" id="baseUrl" name="baseUrl"></div>
+        </div>
+        <label class="label" for="apiKey">Clé API <a id="key-link" target="_blank" rel="noopener" class="small">obtenir une clé</a></label>
+        <input class="input" type="password" id="apiKey" name="apiKey" placeholder="gsk_…" spellcheck="false">
+        <div class="grid-2">
+          <div><label class="label" for="chatModel">Modèle agent (outils)</label><input class="input" id="chatModel" name="chatModel" list="models"></div>
+          <div><label class="label" for="visionModel">Modèle vision (photos)</label><input class="input" id="visionModel" name="visionModel" list="models"></div>
+        </div>
+        <datalist id="models"></datalist>
+        <div class="actions"><button type="button" class="btn" id="load-models"><span data-icon="refresh"></span> Charger les modèles</button><button type="button" class="btn" id="test"><span data-icon="check"></span> Tester</button><span class="small" id="test-out"></span></div>
+
+        <h2>Recherche web</h2>
+        <label class="label" for="tavilyKey">Clé Tavily (optionnel — sinon DuckDuckGo)</label>
+        <input class="input" type="password" id="tavilyKey" name="tavilyKey" placeholder="tvly-…">
+        <div class="actions"><button type="button" class="btn" id="web-perm"><span data-icon="link"></span> Autoriser la lecture de pages web</button><span class="small muted" id="perm-out"></span></div>
+
+        <h2>Vendeur</h2>
+        <div class="grid-2">
+          <div><label class="label" for="vintedDomain">Site Vinted</label><select class="select" id="vintedDomain" name="vintedDomain"></select></div>
+          <div><label class="label" for="feePercent">Frais vendeur (%)</label><input class="input num" id="feePercent" name="feePercent" type="number" min="0" max="50" step="0.5"></div>
+        </div>
+        <label class="label" for="sellerProfile">Ton profil (l'agent s'en sert)</label>
+        <textarea class="textarea" id="sellerProfile" name="sellerProfile" rows="3" placeholder="Ex : je revends du streetwear et du vintage 90s, envoi sous 24 h, réduction lots -15 %, public 18-30 ans."></textarea>
+        <label class="check"><input type="checkbox" id="panelOpenOnForm" name="panelOpenOnForm"> Ouvrir le panel automatiquement sur le formulaire « Vendre »</label>
+        <div class="actions"><button class="btn primary" type="submit"><span data-icon="save"></span> Enregistrer</button><span class="small" id="save-out"></span></div>
+      </form>
+      <p class="muted small privacy">Tes clés restent dans ton navigateur (chrome.storage.local) et ne sont envoyées qu'au fournisseur choisi. Les exports n'incluent jamais les clés.</p>
+    </section>
+  </main>
+
+  <!-- Item drawer -->
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="drawer" id="drawer" aria-label="Article" hidden></aside>
+
+  <script src="../shared/md.js"></script>
+  <script src="../shared/icons.js"></script>
+  <script src="../shared/chat-ui.js"></script>
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>
