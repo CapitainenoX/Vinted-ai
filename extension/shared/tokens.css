@@ -135,6 +135,7 @@
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .thumb button { position: absolute; top: 1px; right: 1px; width: 16px; height: 16px; border-radius: 50%; border: 0; background: rgb(0 0 0 / .6); color: #fff; cursor: pointer; font-size: 11px; line-height: 16px; padding: 0; }
 .results { align-self: stretch; }
+.link-card { align-self: stretch; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .results p { margin: 0 0 8px; }
 .res-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
 .res { position: relative; display: flex; flex-direction: column; gap: 2px; color: var(--text); text-decoration: none; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; background: var(--surface); transition: border-color var(--t-fast); }

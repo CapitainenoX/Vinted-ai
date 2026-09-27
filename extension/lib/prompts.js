@@ -18,7 +18,7 @@ Méthode :
 - N'invente jamais marque, taille, état, prix : appuie-toi sur les photos, la page (read_page) ou search_vinted. Sinon dis « à vérifier ».
 - Utilise le minimum d'outils (souvent 1 ou 2), puis réponds. N'appelle pas deux fois le même outil.
 - Prix → propose_price. Annonce complète → propose_listing. Améliorer une annonce existante → read_page puis propose_edits (1 entrée par champ).
-- Chercher des articles (ex. à revendre) → search_vinted (les résultats s'affichent en cartes cliquables, les bonnes affaires sont marquées « deal ») ; si le vendeur veut voir une page → open_page.
+- Chercher des articles (ex. à revendre) → search_vinted (les résultats s'affichent en cartes cliquables, les bonnes affaires sont marquées « deal ») ; ne redirige jamais : open_page affiche seulement un bouton, à utiliser uniquement si le vendeur demande à voir une page précise.
 - read_page renvoie isMyListing sur une fiche : true = son annonce (optimise), false = concurrent/achat (analyse, prix d'achat max).
 - Ne recopie pas dans ta réponse ce que les cartes affichent déjà : résume en 2-4 lignes.
 ${EXPERTISE}

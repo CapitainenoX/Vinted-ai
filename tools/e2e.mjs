@@ -116,6 +116,13 @@ await panel.locator('.msg.assistant', { hasText: 'Réponse finale après les out
 check(true, 'tool loop → forced final answer (no endless spinner)');
 check(await panel.locator('.tool-line', { hasText: 'déjà fait' }).count() >= 1, 'identical tool call reused, not re-run');
 check((await panel.locator('.chat-status').textContent()) === '', 'status line cleared when done');
+// "bonnes affaires": results shown in the chat, the page is NOT opened automatically (a button instead)
+const pagesBefore = ctx.pages().length;
+await panel.locator('.chat textarea').fill('Trouve-moi une bonne affaire Nike');
+await panel.locator('.chat textarea').press('Enter');
+await panel.locator('.msg.assistant', { hasText: 'Bonnes affaires' }).waitFor({ timeout: 20000 });
+check(ctx.pages().length === pagesBefore && page.url().includes('/items/new'), 'agent never opens/redirects a page by itself');
+check((await panel.locator('.link-card a').last().getAttribute('href')).endsWith('/items/2') && await panel.locator('.results').count() >= 1, 'results stay visible + "Ouvrir" button to open when I want');
 // "Nouvelle conversation"
 await panel.locator('.chat [data-act=new]').click();
 await panel.locator('.chat-empty').waitFor({ timeout: 5000 });

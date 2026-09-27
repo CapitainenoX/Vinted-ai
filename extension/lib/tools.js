@@ -38,7 +38,7 @@ export const TOOL_DEFS = [
     price_to: num('Prix max'),
     limit: num('max 60, défaut 30'),
   }, ['query']),
-  fn('open_page', 'Ouvre une page Vinted dans un onglet : un article (item_id) ou une recherche (search).', {
+  fn('open_page', 'Affiche au vendeur un bouton pour ouvrir une page Vinted (article ou recherche). N\'ouvre rien tout seul. Seulement si le vendeur demande à voir une page.', {
     item_id: str('id de l\'article'),
     search: str('texte de recherche'),
     order: { type: 'string', enum: ['relevance', 'price_low_to_high', 'price_high_to_low', 'newest_first'] },
@@ -177,8 +177,9 @@ async function openPage({ item_id, search, order }, ctx) {
   if (item_id && /^\d+$/.test(String(item_id))) url = `https://${domain}/items/${item_id}`;
   else if (search) url = `https://${domain}/catalog?${new URLSearchParams({ search_text: search, ...(order ? { order } : {}) })}`;
   else throw new Error('item_id ou search requis');
-  await chrome.tabs.create({ url, active: true });
-  return { ok: true, opened: url };
+  // Never navigate on the seller's behalf: show a button, they open it when they want.
+  ctx.emit?.({ type: 'card', card: { kind: 'link', url, label: item_id ? `Article ${item_id}` : `Recherche « ${search} »` } });
+  return { ok: true, note: 'Bouton « Ouvrir » affiché au vendeur (rien n\'a été ouvert).' };
 }
 
 export async function analyzePhotos(ctx, focus, photos) {

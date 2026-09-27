@@ -214,6 +214,7 @@
 
     addCard(card) {
       if (card.kind === 'results') return this.addResults(card);
+      if (card.kind === 'link') return this.addLink(card);
       const rows = cardRows(card);
       const mode = this.applyMode();
       const current = mode === 'fill' ? VAI.readForm?.() || {} : {};
@@ -311,6 +312,16 @@
       // Already on the form → nothing to accept (price options stay open: the seller may still want another one).
       rows.forEach((r, i) => !(r.choices?.length > 1) && current[r.field] && sameValue(current[r.field], r.value) && settle(i, 'done', 'Déjà en place'));
       updateCount();
+      this.log.querySelector('.chat-empty')?.remove();
+      this.log.appendChild(el);
+      this.scroll();
+    }
+
+    addLink(card) {
+      if (!/^https:\/\/[^\s"'<>]+$/.test(card.url || '')) return;
+      const el = document.createElement('div');
+      el.className = 'card link-card fade-up';
+      el.innerHTML = `<span class="small">${icon('external', 12)} ${esc(card.label || 'Page Vinted')}</span><a class="btn primary sm" href="${esc(card.url)}" target="_blank" rel="noopener">Ouvrir</a>`;
       this.log.querySelector('.chat-empty')?.remove();
       this.log.appendChild(el);
       this.scroll();

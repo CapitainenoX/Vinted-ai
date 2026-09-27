@@ -39,7 +39,11 @@ http.createServer((req, res) => {
     else if (b.tools) {
       const toolMsgs = b.messages.filter((m) => m.role === 'tool').length;
       const ask = b.messages.filter((m) => m.role === 'user').at(-1).content;
-      if (ask.includes('Boucle')) {
+      if (/bonne affaire/i.test(ask)) {
+        out = toolMsgs === 0 ? reply(call('search_vinted', { query: 'nike', order: 'price_low_to_high' }))
+          : toolMsgs === 1 ? reply(call('open_page', { item_id: '2' }))
+          : reply({ role: 'assistant', content: '## Bonnes affaires\n- Hoodie Nike M à 20 €' });
+      } else if (ask.includes('Boucle')) {
         out = reply(call('search_vinted', { query: 'boucle' })); // a model that never stops calling tools
       } else if (ask.includes('Optimise')) {
         out = toolMsgs
