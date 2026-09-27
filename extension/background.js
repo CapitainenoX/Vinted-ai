@@ -4,6 +4,7 @@ import * as store from './lib/storage.js';
 import { chatCompletion, listModels, parseJson } from './lib/llm.js';
 import { agentSystemPrompt, listingPrompt, auditPrompt, messagesPrompt } from './lib/prompts.js';
 import { TOOL_DEFS, runTool, searchVinted, analyzePhotos, askTab } from './lib/tools.js';
+import * as watch from './lib/watch.js';
 
 const MAX_STEPS = 8;
 const TOOL_RESULT_CHARS = 4000; // latest tool results
@@ -71,6 +72,18 @@ const handlers = {
     if (matches.length !== 1) return null;
     return store.updateItem(matches[0].id, { vintedId: id, vintedUrl: url, status: 'listed' });
   },
+  'watch:list': async () => ({ watches: await watch.listWatches(), events: await watch.listEvents() }),
+  'watch:add': async ({ input }) => {
+    const w = await watch.addWatch(input, await store.getSettings());
+    await scheduleWatch();
+    return w;
+  },
+  'watch:remove': ({ memberId }) => watch.removeWatch(memberId),
+  'watch:check': async ({ memberId }) => announce(await watch.checkWatches(memberId || null)),
+  'watch:read': async () => {
+    await watch.markEventsRead();
+    await updateBadge();
+  },
   'library:export': () => store.exportAll(),
   'library:import': ({ data }) => store.importAll(data),
   'library:stats': async () => store.computeStats(await store.statsItems(), (await store.getSettings()).feePercent),
@@ -134,6 +147,56 @@ chrome.storage.onChanged.addListener((changes, area) => {
   backupTimer = setTimeout(() => store.backupToSync().catch((e) => console.warn('backup', e)), 3000);
 });
 store.restoreFromSyncIfEmpty().then(() => store.migrateSoldSkus()).catch(() => {});
+
+// ---------- member watch: alarm → check → notify (Chrome notification + icon badge + toast in Vinted tabs) ----------
+async function scheduleWatch() {
+  const { watchInterval = 15 } = await store.getSettings();
+  const has = (await watch.listWatches()).length > 0;
+  const cur = await chrome.alarms.get('watch');
+  if (!has) return cur && chrome.alarms.clear('watch');
+  const period = Math.max(5, Number(watchInterval) || 15);
+  if (!cur || cur.periodInMinutes !== period) chrome.alarms.create('watch', { delayInMinutes: 1, periodInMinutes: period });
+}
+async function updateBadge() {
+  const n = await watch.unreadCount();
+  await chrome.action.setBadgeBackgroundColor({ color: '#c2410c' });
+  await chrome.action.setBadgeText({ text: n ? String(Math.min(n, 99)) : '' });
+}
+async function announce(events) {
+  const loud = events.filter((e) => !e.quiet);
+  await updateBadge();
+  if (!loud.length) return events;
+  const settings = await store.getSettings();
+  const byMember = Object.groupBy ? Object.groupBy(loud, (e) => e.login) : loud.reduce((a, e) => ((a[e.login] ||= []).push(e), a), {});
+  if (settings.watchNotify !== false) {
+    for (const [login, evs] of Object.entries(byMember)) {
+      chrome.notifications.create(`watch-${Date.now()}-${login}`, {
+        type: 'basic',
+        iconUrl: 'icons/icon128.png',
+        title: `Surveillance · @${login} (${evs.length})`,
+        message: evs.slice(0, 4).map((e) => e.text).join('\n'),
+        priority: 1,
+      });
+    }
+  }
+  // Ping every open Vinted tab (the panel shows a toast).
+  const vintedUrls = chrome.runtime.getManifest().content_scripts.find((c) => c.js.includes('content/panel.js')).matches;
+  for (const tab of await chrome.tabs.query({ url: vintedUrls }).catch(() => [])) {
+    chrome.tabs.sendMessage(tab.id, { type: 'watch:events', events: loud.slice(0, 5) }).catch(() => {});
+  }
+  return events;
+}
+chrome.alarms.onAlarm.addListener(async (a) => {
+  if (a.name === 'watch') await announce(await watch.checkWatches().catch(() => []));
+});
+chrome.notifications?.onClicked.addListener((id) => {
+  if (id.startsWith('watch-')) chrome.tabs.create({ url: chrome.runtime.getURL('dashboard/dashboard.html#watch') });
+});
+chrome.storage.onChanged.addListener((c) => {
+  if (c.settings && c.settings.newValue?.watchInterval !== c.settings.oldValue?.watchInterval) scheduleWatch();
+});
+scheduleWatch().catch(() => {});
+updateBadge().catch(() => {});
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === 'install') chrome.tabs.create({ url: chrome.runtime.getURL('dashboard/dashboard.html#settings') });

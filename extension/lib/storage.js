@@ -54,6 +54,8 @@ export const DEFAULT_SETTINGS = {
   panelOpenOnForm: true,
   // Save the form's fields to the library when the seller clicks Vinted's Add / Save button.
   autoSaveOnPublish: true,
+  watchInterval: 15, // minutes between member-watch checks
+  watchNotify: true,
   messageTone: 'vous', // buyer messages: 'vous' (default) or 'tu'
   // Numbers of sold/archived items go back to the pool (their bag is free again).
   skuReuseSold: true,

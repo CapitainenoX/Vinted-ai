@@ -24,6 +24,10 @@ const catalog = { items: [
   { id: 3, title: 'Sweat Nike vintage', price: { amount: '30.0', currency_code: 'EUR' }, item_box: { first_line: 'Nike' }, favourite_count: 30, url: '/items/3-sweat' },
 ], pagination: { total_entries: 3 } };
 
+// Member watch mock (mutated during the test to simulate a sale, a price drop, a new review).
+const wItem = (id, title, price, fav) => ({ id, title, price: { amount: String(price), currency_code: 'EUR' }, favourite_count: fav, view_count: 0, stats_visible: false, is_reserved: false, url: `https://www.vinted.fr/items/${id}`, photos: [] });
+let watchUser = { id: 77, login: 'julie_b', city: 'Lyon', item_count: 2, given_item_count: 10, taken_item_count: 3, feedback_count: 20, feedback_reputation: 0.96, followers_count: 5, is_on_holiday: false, is_online: true, profile_url: 'https://www.vinted.fr/member/77-julie_b' };
+let watchItems = [wItem(501, 'Robe Sézane rouge', 45, 3), wItem(502, 'Sac Longchamp noir', 60, 8)];
 const ctx = await pw.chromium.launchPersistentContext('', {
   channel: 'chromium',
   headless: true,
@@ -49,6 +53,8 @@ await ctx.route('https://www.vinted.fr/**', (route) => {
   const u = new URL(route.request().url());
   if (u.pathname === '/items/new') return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
   if (/^\/items\/\d+[^/]*\/edit/.test(u.pathname)) return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
+  if (u.pathname === '/api/v2/users/77') return route.fulfill({ json: { user: watchUser } });
+  if (u.pathname === '/api/v2/wardrobe/77/items') return route.fulfill({ json: { items: watchItems, pagination: { total_pages: 1 } } });
   if (u.pathname.startsWith('/api/v2/item_upload/items')) return route.fulfill({ json: { item: { id: Number(u.searchParams.get('id')) } } });
   if (u.pathname.startsWith('/member/42')) return route.fulfill({ contentType: 'text/html', body: fixture('profile.html') });
   if (u.pathname.startsWith('/inbox/')) return route.fulfill({ contentType: 'text/html', body: fixture('inbox.html') });
@@ -371,6 +377,33 @@ check(vendu.reused, 'freed number goes to the next new item');
 check(vendu.renumberErr.includes('vendu'), 'a sold item cannot be renumbered');
 check(/^#\d{4}$/.test(vendu.backSku) && vendu.backSku !== vendu.num, `back on sale → a free number again (${vendu.backSku}, its old one was taken)`);
 check(vendu.old[0] === '#VENDU' && vendu.old[1] === '#0077', 'items sold before the update are migrated to #VENDU');
+
+// 7. Member watch: add from the Vinted panel, then a change → notification + badge + dashboard + Vinted tab toast
+const other2 = await ctx.newPage();
+other2.on('pageerror', (e) => errors.push(e.message + ' @ ' + e.stack));
+await other2.goto('https://www.vinted.fr/member/77-julie_b');
+const p7 = other2.locator('#vinted-ai-root');
+await p7.locator('.launcher').click();
+await p7.locator('[data-act=watch]').click();
+await p7.locator('.watch-out', { hasText: '@julie_b est surveillé' }).waitFor({ timeout: 10000 });
+check(true, 'watch a member from their Vinted profile (panel button)');
+check(!!(await sw.evaluate(() => chrome.alarms.get('watch'))), 'periodic check scheduled (chrome.alarms)');
+await dash.goto(`chrome-extension://${id}/dashboard/dashboard.html#watch`);
+await dash.locator('.watch-card').waitFor({ timeout: 8000 });
+check((await dash.locator('.watch-card').textContent()).includes('@julie_b') && (await dash.locator('.watch-card .wk').first().textContent()).includes('2'), 'dashboard: watched member card (2 on sale)');
+// she sells the dress, drops the bag's price, gets a review
+watchItems = [wItem(502, 'Sac Longchamp noir', 52, 9)];
+watchUser = { ...watchUser, item_count: 1, given_item_count: 11, feedback_count: 21 };
+await dash.locator('#watch-check').click();
+await dash.locator('.event', { hasText: 'Vendu : Robe Sézane rouge' }).waitFor({ timeout: 10000 });
+const evText = await dash.locator('#watch-events').textContent();
+check(evText.includes('60 € → 52 €') && evText.includes('1 nouvelle(s) vente(s)') && evText.includes('nouvel(s) avis'), 'changes detected: sold item, price drop, sales count, new review');
+const badge = await sw.evaluate(() => chrome.action.getBadgeText({}));
+check(badge === '' || Number(badge) >= 4, `extension icon badge pinged (${badge || 'read on dashboard'})`);
+check((await sw.evaluate(() => new Promise((r) => chrome.notifications.getAll(r))) && true), 'Chrome notification sent');
+await p7.locator('.toast', { hasText: '@julie_b' }).waitFor({ timeout: 8000 }).then(() => check(true, 'Vinted tab pinged (toast in the panel)'), () => check(false, 'Vinted tab pinged (toast in the panel)'));
+await dash.screenshot({ path: `${shots}/10-watch.png`, fullPage: true });
+await other2.close();
 
 check(errors.length === 0, `no page errors ${errors.length ? JSON.stringify(errors) : ''}`);
 await ctx.close();

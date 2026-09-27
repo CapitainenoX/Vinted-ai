@@ -29,7 +29,7 @@ themeBtn.onclick = () => {
 };
 
 // ---------- router ----------
-const pages = { overview: renderOverview, library: renderLibrary, agent: renderAgent, settings: renderSettings };
+const pages = { overview: renderOverview, library: renderLibrary, watch: renderWatch, agent: renderAgent, settings: renderSettings };
 function route() {
   const name = pages[location.hash.slice(1)] ? location.hash.slice(1) : 'overview';
   $$('[data-page]').forEach((s) => (s.hidden = s.dataset.page !== name));
@@ -42,6 +42,10 @@ window.addEventListener('hashchange', () => {
   route();
 });
 chrome.storage.onChanged.addListener((c) => {
+  if (c.watchEvents || c.watches) {
+    drawWatchBadge();
+    if (location.hash === '#watch') renderWatch({ keepMsg: true });
+  }
   // Refresh when the panel/agent changes the library — but never under an open editor.
   if (c.library && $('#drawer').hidden && ['overview', 'library', ''].includes(location.hash.slice(1))) route();
 });
@@ -574,3 +578,135 @@ $('#web-perm').onclick = async () => {
 };
 
 route();
+
+
+// ---------- watch (member surveillance) ----------
+const ago = (t) => {
+  if (!t) return '–';
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? "à l'instant" : m < 60 ? `il y a ${m} min` : m < 1440 ? `il y a ${Math.round(m / 60)} h` : `il y a ${Math.round(m / 1440)} j`;
+};
+const EVENT_CHIP = { sold: ['success', 'Vendu'], gone: ['', 'Retiré'], new: ['accent', 'Nouveau'], price: ['warn', 'Prix'], reserved: ['accent', 'Réservé'], sales: ['success', 'Ventes'], feedback: ['', 'Avis'], followers: ['', 'Abonnés'], holiday: ['warn', 'Vacances'], favs: ['', 'Favoris'], views: ['', 'Vues'] };
+const safeUrl = (u) => (/^https:\/\/[^\s"'<>]+$/.test(u || '') ? u : null);
+const openItems = new Set();
+
+async function drawWatchBadge() {
+  const { events } = await window.VAI.send('watch:list').catch(() => ({ events: [] }));
+  const n = events.filter((e) => !e.read && !e.quiet).length;
+  $('#watch-badge').hidden = !n;
+  $('#watch-badge').textContent = n;
+}
+drawWatchBadge();
+
+async function renderWatch({ keepMsg = false } = {}) {
+  const [{ watches, events }, settings] = await Promise.all([window.VAI.send('watch:list'), store.getSettings()]);
+  if (!keepMsg) $('#watch-msg').textContent = '';
+  $('#watch-interval').value = String(settings.watchInterval || 15);
+  $('#watch-list').innerHTML = watches.length
+    ? watches.map(watchCard).join('')
+    : `<div class="card empty-watch"><p><strong>Aucun membre surveillé.</strong></p><p class="muted small">Colle l'URL d'un profil (concurrent, vendeur à suivre…). Je vérifie régulièrement ses articles, ses ventes, ses avis et je te préviens dès que ça bouge.</p></div>`;
+  const unreadIds = new Set(events.filter((e) => !e.read).map((e) => e.id));
+  $('#watch-events').innerHTML = events.length
+    ? events.slice(0, 80).map((e) => {
+        const [cls, label] = EVENT_CHIP[e.type] || ['', e.type];
+        const url = safeUrl(e.url);
+        return `<div class="event ${unreadIds.has(e.id) ? 'unread' : ''} ${e.quiet ? 'quiet' : ''}">
+          ${safeUrl(e.photo) ? `<img src="${esc(e.photo)}" alt="">` : `<div class="ph">${icon('bell', 14)}</div>`}
+          <div class="grow"><div><span class="chip ${cls}">${label}</span> <span class="muted small">@${esc(e.login)} · ${esc(when(e.at))}</span></div>
+          <div class="ellipsis-2">${esc(e.text)}</div></div>
+          ${url ? `<a class="btn sm ghost" href="${esc(url)}" target="_blank" rel="noopener">Voir</a>` : ''}</div>`;
+      }).join('')
+    : '<p class="muted small">Les changements (vente, article retiré, baisse de prix, nouvel avis…) apparaîtront ici.</p>';
+  paintIcons($('#watch-list'));
+  $$('[data-wcheck]').forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    const evs = await window.VAI.send('watch:check', { memberId: b.dataset.wcheck }).catch((e) => ($('#watch-msg').textContent = e.message, []));
+    $('#watch-msg').textContent = evs.length ? `${evs.length} changement(s) détecté(s).` : 'Aucun changement.';
+    renderWatch({ keepMsg: true });
+  }));
+  $$('[data-wremove]').forEach((b) => (b.onclick = async () => {
+    await window.VAI.send('watch:remove', { memberId: b.dataset.wremove });
+    renderWatch();
+  }));
+  $$('[data-witems]').forEach((b) => (b.onclick = () => {
+    openItems.has(b.dataset.witems) ? openItems.delete(b.dataset.witems) : openItems.add(b.dataset.witems);
+    renderWatch({ keepMsg: true });
+  }));
+  // Seen: mark read shortly after display (the highlight stays until the next render).
+  if (unreadIds.size) setTimeout(() => window.VAI.send('watch:read').then(drawWatchBadge), 1500);
+}
+
+function watchCard(w) {
+  const u = w.snapshot.user;
+  const items = Object.entries(w.snapshot.items);
+  const favs = items.reduce((a, [, i]) => a + (i.fav || 0), 0);
+  const views = items.some(([, i]) => i.v != null) ? items.reduce((a, [, i]) => a + (i.v || 0), 0) : null;
+  const kpi = (k, v, tip) => `<div class="wk" data-tip="${esc(tip || k)}"><div class="v num">${esc(v)}</div><div class="k">${k}</div></div>`;
+  return `<div class="card watch-card">
+    <div class="watch-head">
+      ${safeUrl(u.photo) ? `<img class="avatar" src="${esc(u.photo)}" alt="">` : `<div class="avatar ph">${icon('eye', 16)}</div>`}
+      <div class="grow"><div><strong>@${esc(u.login)}</strong> ${u.holiday ? '<span class="chip warn">vacances</span>' : ''} ${u.online ? '<span class="chip success">en ligne</span>' : ''}</div>
+        <div class="muted small">${esc(u.city || '')}${u.lastLogin ? ` · vu ${esc(ago(u.lastLogin))}` : ''} · vérifié ${esc(ago(w.lastCheck))}${w.lastError ? ` · <span class="neg">erreur : ${esc(w.lastError)}</span>` : ''}</div></div>
+      <a class="btn sm ghost" href="${esc(safeUrl(u.url) || '#')}" target="_blank" rel="noopener">Profil</a>
+    </div>
+    <div class="wkpis">
+      ${kpi('en vente', items.length)}
+      ${kpi('ventes', u.sold ?? '–', 'Articles vendus au total (compteur Vinted)')}
+      ${kpi('avis', u.rating != null ? `${u.feedback} · ${u.rating}★` : u.feedback)}
+      ${kpi('favoris', favs, 'Total des ♥ sur ses articles en vente')}
+      ${kpi('vues', views ?? '–', views == null ? 'Vues masquées par Vinted pour ce membre' : 'Total des vues')}
+      ${kpi('abonnés', u.followers)}
+    </div>
+    ${sparkline(w.history)}
+    <div class="actions">
+      <button class="btn sm" data-wcheck="${esc(w.memberId)}">${icon('refresh', 12)} Vérifier</button>
+      <button class="btn sm ghost" data-witems="${esc(w.memberId)}">${icon('tag', 12)} Articles (${items.length})</button>
+      <button class="btn sm ghost" data-wremove="${esc(w.memberId)}">${icon('x', 12)} Retirer</button>
+    </div>
+    ${openItems.has(w.memberId) ? `<div class="witems">${items.map(([id, i]) => `<a class="witem" href="${esc(safeUrl(i.u) || '#')}" target="_blank" rel="noopener">
+        ${safeUrl(i.ph) ? `<img src="${esc(i.ph)}" alt="" loading="lazy">` : '<div class="ph"></div>'}
+        <span class="ellipsis">${esc(i.t)}</span><span class="muted small num">${i.p != null ? esc(i.p) + ' €' : ''} · ♥ ${esc(i.fav)}${i.v != null ? ` · ${esc(i.v)} vues` : ''}${i.r ? ' · réservé' : ''}</span></a>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+// Total sales over time (step line) — one series, tooltip on each point.
+function sparkline(history) {
+  const pts = (history || []).filter((p) => p.sold != null);
+  if (pts.length < 2) return '<p class="muted small">L’historique des ventes se construit à chaque vérification.</p>';
+  const W = 320, H = 56, pad = 4;
+  const t0 = pts[0].at, t1 = pts.at(-1).at || t0 + 1;
+  const min = Math.min(...pts.map((p) => p.sold)), max = Math.max(...pts.map((p) => p.sold));
+  const x = (t) => pad + ((t - t0) / (t1 - t0 || 1)) * (W - 2 * pad);
+  const y = (v) => H - pad - ((v - min) / (max - min || 1)) * (H - 2 * pad);
+  let d = `M${x(pts[0].at)},${y(pts[0].sold)}`;
+  for (const p of pts.slice(1)) d += `H${x(p.at)}V${y(p.sold)}`;
+  const dots = pts.filter((p, k) => k === 0 || p.sold !== pts[k - 1].sold).map((p) => `<circle class="dot" cx="${x(p.at)}" cy="${y(p.sold)}" r="3" data-tip="${esc(when(p.at))} : ${p.sold} ventes · ${p.onSale} en vente · ${p.favs} ♥"/>`).join('');
+  return `<div class="chart spark"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Ventes totales dans le temps"><path class="line" d="${d}"/>${dots}</svg><span class="muted small">ventes : ${pts[0].sold} → ${pts.at(-1).sold}</span></div>`;
+}
+
+$('#watch-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const input = $('#watch-input').value.trim();
+  if (!input) return;
+  const btn = e.submitter;
+  btn.disabled = true;
+  $('#watch-msg').textContent = 'Lecture du profil…';
+  try {
+    const w = await window.VAI.send('watch:add', { input });
+    $('#watch-input').value = '';
+    $('#watch-msg').textContent = `@${w.login} est surveillé (${Object.keys(w.snapshot.items).length} articles en vente).`;
+  } catch (err) {
+    $('#watch-msg').textContent = err.message;
+  }
+  btn.disabled = false;
+  renderWatch({ keepMsg: true });
+};
+$('#watch-check').onclick = async (e) => {
+  const btn = e.currentTarget; // currentTarget is null after an await
+  btn.disabled = true;
+  const evs = await window.VAI.send('watch:check', {}).catch(() => []);
+  $('#watch-msg').textContent = evs.length ? `${evs.length} changement(s) détecté(s).` : 'Aucun changement.';
+  btn.disabled = false;
+  renderWatch({ keepMsg: true });
+};
+$('#watch-interval').onchange = (e) => store.saveSettings({ watchInterval: +e.target.value });

@@ -665,7 +665,18 @@
     if (!mine) {
       view.innerHTML = `<div class="pad"><div class="card"><strong>Profil d'un autre membre</strong>
         <p class="small muted">Sur ton propre profil, je liste tes articles en vente avec Voir / Vendu / Nouvel article.</p>
-        <div class="actions"><button class="btn sm" data-act="its-me">C'est mon profil</button></div></div></div>`;
+        <div class="actions"><button class="btn primary sm" data-act="watch">${icon('eye', 12)} Surveiller ce membre</button><button class="btn sm ghost" data-act="its-me">C'est mon profil</button></div>
+        <p class="small watch-out"></p></div></div>`;
+      view.querySelector('[data-act=watch]').onclick = (e) =>
+        busy(e.currentTarget, async () => {
+          const out = view.querySelector('.watch-out');
+          try {
+            const w = await send('watch:add', { input: location.href });
+            out.innerHTML = `${icon('check', 12)} @${esc(w.login)} est surveillé : je te préviens à chaque vente, nouvel article ou baisse de prix.`;
+          } catch (err) {
+            out.textContent = err.message;
+          }
+        });
       view.querySelector('[data-act=its-me]').onclick = async () => {
         await send('settings:save', { patch: { myMemberId: memberId } });
         renderProfile(view);
@@ -926,6 +937,13 @@
     }
     return item;
   }
+
+  // Member watch pings from the background: show them on the Vinted page.
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type !== 'watch:events' || !msg.events?.length) return;
+    const e = msg.events[0];
+    toast(`${icon('bell', 14)} @${esc(e.login)} · ${esc(e.text)}${msg.events.length > 1 ? ` (+${msg.events.length - 1})` : ''}`);
+  });
 
   // ---------- page-aware boot ----------
   function updatePageChip() {

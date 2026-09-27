@@ -14,6 +14,7 @@
     <nav>
       <a href="#overview" data-route="overview"><span data-icon="chart"></span> Vue d'ensemble</a>
       <a href="#library" data-route="library"><span data-icon="book"></span> Bibliothèque</a>
+      <a href="#watch" data-route="watch"><span data-icon="eye"></span> Surveillance <span class="nav-badge" id="watch-badge" hidden></span></a>
       <a href="#agent" data-route="agent"><span data-icon="chat"></span> Agent</a>
       <a href="#settings" data-route="settings"><span data-icon="settings"></span> Paramètres</a>
     </nav>
@@ -70,6 +71,27 @@
       <div class="card table-card"><table class="table" id="table"><thead><tr>
         <th></th><th data-sort="sku">N°</th><th data-sort="title">Article</th><th data-sort="status">Statut</th><th data-sort="price" class="r">Prix</th><th data-sort="cost" class="r">Coût</th><th data-sort="soldPrice" class="r">Vendu</th><th class="r">Marge</th><th data-sort="updatedAt" class="r">Modifié</th>
       </tr></thead><tbody></tbody></table><p class="empty muted" id="empty" hidden>Aucun article. Génère une annonce sur Vinted puis clique « Bibliothèque », ou crée-en un ici.</p></div>
+    </section>
+
+    <!-- Watch -->
+    <section data-page="watch" hidden>
+      <div class="page-head"><h1>Surveillance</h1>
+        <div class="head-actions">
+          <label class="small muted" for="watch-interval">Vérifier toutes les</label>
+          <select class="select" id="watch-interval"><option value="5">5 min</option><option value="15">15 min</option><option value="30">30 min</option><option value="60">1 h</option><option value="180">3 h</option></select>
+          <button class="btn" id="watch-check"><span data-icon="refresh"></span> Vérifier maintenant</button>
+        </div>
+      </div>
+      <form class="card watch-add" id="watch-form" autocomplete="off">
+        <input class="input" id="watch-input" placeholder="URL d'un profil : https://www.vinted.fr/member/13909279" aria-label="URL du profil à surveiller">
+        <button class="btn primary" type="submit"><span data-icon="plus"></span> Surveiller</button>
+      </form>
+      <p class="small watch-msg" id="watch-msg"></p>
+      <div class="watch-grid">
+        <div id="watch-list" class="watch-list"></div>
+        <div class="card"><div class="card-head"><h2>Changements</h2><button class="btn sm ghost" id="watch-read">Tout marquer lu</button></div><div id="watch-events"></div></div>
+      </div>
+      <p class="small muted">Vérifié en arrière-plan tant que Chrome est ouvert. Notification + pastille sur l'icône + message dans l'onglet Vinted à chaque changement (article vendu ou retiré, nouveau, prix, réservé, ventes, avis, vacances). Les vues ne sont visibles que si Vinted les affiche pour ce membre.</p>
     </section>
 
     <!-- Agent -->
