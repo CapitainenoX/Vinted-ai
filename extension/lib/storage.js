@@ -65,6 +65,15 @@ export const DEFAULT_SETTINGS = {
 
 const K = { settings: 'settings', library: 'library', chats: 'chats', salesArchive: 'salesArchive' };
 
+// Library writes are read-modify-write of one array: run them one at a time, or two concurrent
+// updates (e.g. photos + Vinted link right after publishing) overwrite each other.
+let lock = Promise.resolve();
+const serial = (fn) => (...args) => {
+  const run = lock.then(() => fn(...args));
+  lock = run.catch(() => {});
+  return run;
+};
+
 const get = async (key, fallback) => (await chrome.storage.local.get(key))[key] ?? fallback;
 const set = (key, value) => chrome.storage.local.set({ [key]: value });
 
@@ -112,7 +121,7 @@ export async function listItems() {
 }
 
 // One-time fix for items sold before #VENDU existed: free their numbers.
-export async function migrateSoldSkus() {
+async function migrateSoldSkusNow() {
   const items = await listItems();
   let changed = 0;
   for (const i of items) {
@@ -127,6 +136,7 @@ export async function migrateSoldSkus() {
   if (archive.some((i) => i.sku !== SOLD_SKU)) await set(K.salesArchive, archive.map((i) => (i.sku === SOLD_SKU ? i : { ...i, formerSku: i.formerSku || i.sku, sku: SOLD_SKU })));
   return changed;
 }
+export const migrateSoldSkus = serial(migrateSoldSkusNow);
 
 // Several items can share a number (a sold one and the active one that reused it):
 // resolve to the active item first, then the most recent.
@@ -173,7 +183,7 @@ function clean(patch) {
   return out;
 }
 
-export async function createItem(data) {
+export const createItem = serial(async function createItem(data) {
   const settings = await getSettings();
   const items = await listItems();
   const now = Date.now();
@@ -193,9 +203,9 @@ export async function createItem(data) {
   items.unshift(item);
   await set(K.library, items);
   return item;
-}
+});
 
-export async function updateItem(ref, patch) {
+export const updateItem = serial(async function updateItem(ref, patch) {
   const items = await listItems();
   const idx = findIndexByRef(items, ref);
   if (idx < 0) throw new Error(`Article introuvable : ${ref}`);
@@ -221,9 +231,9 @@ export async function updateItem(ref, patch) {
   items[idx] = next;
   await set(K.library, items);
   return next;
-}
+});
 
-export async function deleteItem(ref) {
+export const deleteItem = serial(async function deleteItem(ref) {
   const items = await listItems();
   const idx = findIndexByRef(items, ref);
   if (idx < 0) return;
@@ -234,7 +244,7 @@ export async function deleteItem(ref) {
   }
   items.splice(idx, 1);
   await set(K.library, items);
-}
+});
 
 export const listSalesArchive = () => get(K.salesArchive, []);
 // Everything the stats need: current items + sales of deleted items.
@@ -266,7 +276,7 @@ export async function backupToSync() {
   if (stale.length) await chrome.storage.sync.remove(stale);
   await chrome.storage.sync.set({ ...chunks, bkMeta: { at: Date.now(), n: all.length, chunks: Object.keys(chunks).length } });
 }
-export async function restoreFromSyncIfEmpty() {
+export const restoreFromSyncIfEmpty = serial(async function restoreFromSyncIfEmpty() {
   if (!chrome.storage.sync || (await listItems()).length || (await listSalesArchive()).length) return 0;
   const data = await chrome.storage.sync.get(null);
   if (!data.bkMeta) return 0;
@@ -276,14 +286,14 @@ export async function restoreFromSyncIfEmpty() {
   await set(K.library, all.filter((i) => !i.deletedAt).map((i) => ({ tags: [], photos: [], history: [{ at: Date.now(), event: 'restored' }], ...i })));
   await set(K.salesArchive, all.filter((i) => i.deletedAt));
   return all.length;
-}
+});
 export async function backupInfo() {
   const { bkMeta } = chrome.storage.sync ? await chrome.storage.sync.get('bkMeta') : {};
   return bkMeta || null;
 }
 
 // Change an item's number. If another active item holds it: error, or swap numbers when asked.
-export async function setItemNumber(ref, number, { swap = false } = {}) {
+export const setItemNumber = serial(async function setItemNumber(ref, number, { swap = false } = {}) {
   const n = skuNumber(number);
   if (!n || n > 99999) throw new Error('Numéro invalide (1 à 99999).');
   const [items, settings] = await Promise.all([listItems(), getSettings()]);
@@ -310,7 +320,7 @@ export async function setItemNumber(ref, number, { swap = false } = {}) {
   item.history = [...(item.history || []), { at: now, event: 'renumbered', from, to: item.sku }];
   await set(K.library, items);
   return { item, swappedWith: holder ? { id: holder.id, sku: holder.sku } : null };
-}
+});
 
 export async function searchItems({ query = '', status = '' } = {}) {
   const q = query.toLowerCase().trim();
@@ -339,7 +349,7 @@ export async function exportAll() {
   const { apiKey, tavilyKey, myMemberId, ...safeSettings } = await getSettings(); // never export secrets
   return { app: 'vinted-ai', version: 1, exportedAt: new Date().toISOString(), settings: safeSettings, library: await listItems(), salesArchive: await listSalesArchive() };
 }
-export async function importAll(data) {
+export const importAll = serial(async function importAll(data) {
   if (!data || data.app !== 'vinted-ai' || !Array.isArray(data.library)) throw new Error('Fichier non reconnu');
   const current = await listItems();
   const byId = new Map(current.map((i) => [i.id, i]));
@@ -351,9 +361,9 @@ export async function importAll(data) {
     for (const it of data.salesArchive) if (it?.id) arch.set(it.id, it);
     await set(K.salesArchive, [...arch.values()]);
   }
-  await migrateSoldSkus();
+  await migrateSoldSkusNow(); // already inside the lock
   return merged.length;
-}
+});
 
 // ---------- stats (dashboard + agent) ----------
 export function computeStats(items, feePercent = 0) {

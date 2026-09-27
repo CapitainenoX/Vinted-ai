@@ -16,7 +16,7 @@
   root.innerHTML = `
     <link rel="stylesheet" href="${chrome.runtime.getURL('shared/tokens.css')}">
     <link rel="stylesheet" href="${chrome.runtime.getURL('content/panel.css')}">
-    <button class="launcher" aria-label="Ouvrir Vinted AI" title="Vinted AI (Alt+V)">${icon('sparkles', 20)}</button>
+    <button class="launcher" aria-label="Ouvrir Vinted AI" title="Vinted AI (Alt+V)">${icon('sparkles', 20)}<span class="launcher-badge" hidden></span></button>
     <aside class="panel" role="dialog" aria-label="Vinted AI" hidden>
       <header>
         <div class="brand">${icon('sparkles', 16)}<span>Vinted AI</span><span class="chip page-chip"></span></div>
@@ -28,11 +28,13 @@
       <nav class="tabs" role="tablist">
         <button role="tab" data-tab="listing">${icon('wand', 14)} Annonce</button>
         <button role="tab" data-tab="chat">${icon('chat', 14)} Agent</button>
-        <button role="tab" data-tab="library">${icon('book', 14)} Bibliothèque</button>
+        <button role="tab" data-tab="library">${icon('book', 14)} Biblio</button>
+        <button role="tab" data-tab="alerts">${icon('bell', 14)} Alertes<span class="tab-badge" hidden></span></button>
       </nav>
       <section class="view" data-view="listing"></section>
       <section class="view" data-view="chat"></section>
       <section class="view" data-view="library"></section>
+      <section class="view" data-view="alerts"></section>
     </aside>
     <div class="toast" role="status" hidden></div>`;
   document.documentElement.appendChild(host);
@@ -62,6 +64,7 @@
     if (tab === 'chat' && !chat) initChat();
     if (tab === 'listing') renderListing();
     if (tab === 'library') renderLibrary();
+    if (tab === 'alerts') renderAlerts();
   }
   launcher.onclick = () => open();
   root.querySelectorAll('[role=tab]').forEach((b) => (b.onclick = () => show(b.dataset.tab)));
@@ -937,6 +940,76 @@
     }
     return item;
   }
+
+  // ---------- alerts tab: live feed of the member watch ----------
+  const ALERT_CHIP = { sold: ['success', 'Vendu'], gone: ['', 'Retiré'], new: ['accent', 'Nouveau'], price: ['warn', 'Prix'], reserved: ['accent', 'Réservé'], sales: ['success', 'Ventes'], feedback: ['', 'Avis'], followers: ['', 'Abonnés'], holiday: ['warn', 'Vacances'], favs: ['', 'Favoris'], views: ['', 'Vues'] };
+  const safeUrl = (u) => (/^https:\/\/[^\s"'<>]+$/.test(u || '') ? u : null);
+  const ago = (t) => {
+    const m = Math.round((Date.now() - (t || 0)) / 60000);
+    return m < 1 ? "à l'instant" : m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} j`;
+  };
+  let readTimer = null;
+
+  async function renderAlerts() {
+    const view = $('[data-view=alerts]');
+    const { watches = [], events = [] } = await send('watch:list').catch(() => ({}));
+    const unread = new Set(events.filter((e) => !e.read).map((e) => e.id));
+    view.innerHTML = `<div class="pad stack">
+      <div class="card">
+        <div class="row-between"><strong>Membres surveillés (${watches.length})</strong>
+          <button class="btn sm" data-act="watch-check">${icon('refresh', 12)} Vérifier</button></div>
+        ${watches.length
+          ? `<div class="watch-mini">${watches.map((w) => `<a class="wm" href="${esc(safeUrl(w.snapshot.user.url) || '#')}">
+              <b>@${esc(w.login)}</b><span class="small muted">${Object.keys(w.snapshot.items).length} en vente · ${esc(w.snapshot.user.sold ?? '–')} ventes · ${esc(ago(w.lastCheck))}</span>
+              ${w.lastError ? `<span class="small neg">${esc(w.lastError)}</span>` : ''}</a>`).join('')}</div>`
+          : '<p class="small muted">Aucun. Ouvre le profil d’un vendeur et clique « Surveiller ce membre » (onglet Profil), ou ajoute-le dans le dashboard.</p>'}
+        <p class="small muted check-out"></p>
+      </div>
+      <div class="row-between"><strong>Changements</strong><span class="actions"><button class="btn sm ghost" data-act="watch-read">Tout lu</button><button class="btn sm ghost" data-act="watch-dash">${icon('chart', 12)} Dashboard</button></span></div>
+      <div class="alert-list">${events.length
+        ? events.slice(0, 50).map((e) => {
+            const [cls, label] = ALERT_CHIP[e.type] || ['', e.type];
+            const url = safeUrl(e.url);
+            return `<${url ? `a href="${esc(url)}"` : 'div'} class="alert-row ${unread.has(e.id) ? 'unread' : ''} ${e.quiet ? 'quiet' : ''}">
+              ${safeUrl(e.photo) ? `<img src="${esc(e.photo)}" alt="">` : `<span class="ph">${icon('bell', 12)}</span>`}
+              <span class="grow"><span class="alert-meta"><span class="chip ${cls}">${label}</span><span class="small muted">@${esc(e.login)} · ${esc(ago(e.at))}</span></span><span class="alert-text">${esc(e.text)}</span></span>
+            </${url ? 'a' : 'div'}>`;
+          }).join('')
+        : '<p class="small muted">Rien pour l’instant. Les ventes, articles retirés, baisses de prix et nouveaux avis des membres surveillés arrivent ici en direct.</p>'}</div>
+    </div>`;
+    view.querySelector('[data-act=watch-check]').onclick = (e) =>
+      busy(e.currentTarget, async () => {
+        const evs = await send('watch:check', {});
+        view.querySelector('.check-out').textContent = evs.length ? `${evs.length} changement(s).` : 'Aucun changement.';
+      });
+    view.querySelector('[data-act=watch-read]').onclick = () => send('watch:read').then(updateAlertBadge);
+    view.querySelector('[data-act=watch-dash]').onclick = () => send('dashboard:open', { hash: '#watch' });
+    // Seen: mark read shortly after display, only while the tab is actually visible.
+    clearTimeout(readTimer);
+    if (unread.size) readTimer = setTimeout(() => panel.classList.contains('open') && current === 'alerts' && send('watch:read').then(updateAlertBadge), 2500);
+  }
+
+  async function updateAlertBadge() {
+    const { watchEvents = [] } = await chrome.storage.local.get('watchEvents');
+    const n = watchEvents.filter((e) => !e.read && !e.quiet).length;
+    for (const el of [$('.tab-badge'), $('.launcher-badge')]) {
+      el.hidden = !n;
+      el.textContent = n > 99 ? '99+' : n;
+    }
+  }
+  updateAlertBadge();
+  // Live: the background writes events → every open Vinted tab updates instantly.
+  chrome.storage.onChanged.addListener((c, area) => {
+    if (area !== 'local' || !(c.watchEvents || c.watches)) return;
+    updateAlertBadge();
+    const added = (c.watchEvents?.newValue?.length || 0) > (c.watchEvents?.oldValue?.length || 0);
+    if (added) {
+      launcher.classList.remove('ping');
+      void launcher.offsetWidth; // restart the animation
+      launcher.classList.add('ping');
+    }
+    if (panel.classList.contains('open') && current === 'alerts') renderAlerts();
+  });
 
   // Member watch pings from the background: show them on the Vinted page.
   chrome.runtime.onMessage.addListener((msg) => {

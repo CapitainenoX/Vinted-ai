@@ -325,7 +325,7 @@ for (const [apiId, title] of [['1001', 'Robe Mango noire M'], ['1002', 'Pull Zar
 }
 const zara = await sw.evaluate(async () => (await chrome.storage.local.get('library')).library.find((i) => i.title === 'Veste Zara en jean bleue L'));
 check(skus[0][0] && skus[1][0] && skus[0][0] !== skus[1][0] && skus[0][0] !== zara.sku, `each publish = a new item with its own number (${zara.sku}, ${skus[0][0]}, ${skus[1][0]})`);
-check(skus[0][1] === '1001' && skus[1][1] === '1002' && zara.vintedId === '888', 'each item linked to ITS listing right after publishing (API), no page visit needed');
+check(skus[0][1] === '1001' && skus[1][1] === '1002' && zara.vintedId === '888', `each item linked to ITS listing right after publishing (API), no page visit needed ${JSON.stringify([zara.vintedId, skus])}`);
 
 // 6. My profile: listings on sale → mark one as sold
 const prof = await ctx.newPage();
@@ -388,6 +388,9 @@ await p7.locator('[data-act=watch]').click();
 await p7.locator('.watch-out', { hasText: '@julie_b est surveillé' }).waitFor({ timeout: 10000 });
 check(true, 'watch a member from their Vinted profile (panel button)');
 check(!!(await sw.evaluate(() => chrome.alarms.get('watch'))), 'periodic check scheduled (chrome.alarms)');
+await p7.locator('[data-tab=alerts]').click();
+await p7.locator('.wm', { hasText: '@julie_b' }).waitFor({ timeout: 5000 });
+check((await p7.locator('.wm').textContent()).includes('2 en vente'), 'panel "Alertes" tab lists watched members');
 await dash.goto(`chrome-extension://${id}/dashboard/dashboard.html#watch`);
 await dash.locator('.watch-card').waitFor({ timeout: 8000 });
 check((await dash.locator('.watch-card').textContent()).includes('@julie_b') && (await dash.locator('.watch-card .wk').first().textContent()).includes('2'), 'dashboard: watched member card (2 on sale)');
@@ -401,6 +404,9 @@ check(evText.includes('60 € → 52 €') && evText.includes('1 nouvelle(s) ven
 const badge = await sw.evaluate(() => chrome.action.getBadgeText({}));
 check(badge === '' || Number(badge) >= 4, `extension icon badge pinged (${badge || 'read on dashboard'})`);
 check((await sw.evaluate(() => new Promise((r) => chrome.notifications.getAll(r))) && true), 'Chrome notification sent');
+await p7.locator('.alert-row', { hasText: 'Vendu : Robe Sézane rouge' }).waitFor({ timeout: 8000 });
+check((await p7.locator('.alert-list').textContent()).includes('60 € → 52 €'), 'panel alerts feed updates live (no click)');
+await other2.screenshot({ path: `${shots}/11-panel-alerts.png` });
 await p7.locator('.toast', { hasText: '@julie_b' }).waitFor({ timeout: 8000 }).then(() => check(true, 'Vinted tab pinged (toast in the panel)'), () => check(false, 'Vinted tab pinged (toast in the panel)'));
 await dash.screenshot({ path: `${shots}/10-watch.png`, fullPage: true });
 await other2.close();
