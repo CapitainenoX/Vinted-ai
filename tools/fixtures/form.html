@@ -18,6 +18,11 @@
   brand.addEventListener('click', () => (list.hidden = false));
   list.querySelectorAll('li').forEach((li) => li.addEventListener('click', () => { brand.value = li.textContent; brand.dataset.picked = li.textContent; list.hidden = true; }));
   // Like Vinted: publishing opens the new listing.
-  document.getElementById('publish').addEventListener('click', () => setTimeout(() => (location.href = '/items/888-veste-zara'), 300));
+  // ?api=<id>: like Vinted's real flow, the save goes through its API (read by the page hook), no redirect.
+  document.getElementById('publish').addEventListener('click', () => {
+    const apiId = new URLSearchParams(location.search).get('api');
+    if (apiId) fetch('/api/v2/item_upload/items?id=' + apiId, { method: 'POST', body: '{}' });
+    else setTimeout(() => (location.href = '/items/888-veste-zara'), 300);
+  });
   window.reactLike = {}; ['title','description','price'].forEach((id) => document.getElementById(id).addEventListener('input', (e) => (window.reactLike[id] = e.target.value)));
 </script></body></html>

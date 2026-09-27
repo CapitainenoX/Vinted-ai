@@ -50,6 +50,27 @@ const handlers = {
     }
     return { item: await store.createItem(data), created: true };
   },
+  // Link a library item to a Vinted listing id; a wrong earlier link of that id is removed.
+  'library:link': async ({ ref, vintedId, url }) => {
+    const id = String(vintedId || '').replace(/\D/g, '');
+    if (!id) throw new Error('id Vinted invalide');
+    const target = await store.getItem(ref);
+    if (!target) throw new Error('Article introuvable');
+    for (const other of (await store.listItems()).filter((i) => i.id !== target.id && String(i.vintedId) === id)) {
+      await store.updateItem(other.id, { vintedId: null, vintedUrl: null });
+    }
+    return store.updateItem(target.id, { vintedId: id, vintedUrl: url, ...(target.status === 'draft' ? { status: 'listed' } : {}) });
+  },
+  // Exact-title match with exactly one unlinked active item → link it. Returns the item or null.
+  'library:autolink': async ({ vintedId, title, url }) => {
+    const id = String(vintedId || '').replace(/\D/g, '');
+    const norm = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    const items = await store.listItems();
+    if (!id || items.some((i) => String(i.vintedId) === id)) return null;
+    const matches = items.filter((i) => !i.vintedId && (i.status === 'listed' || i.status === 'draft') && norm(i.title) && norm(i.title) === norm(title));
+    if (matches.length !== 1) return null;
+    return store.updateItem(matches[0].id, { vintedId: id, vintedUrl: url, status: 'listed' });
+  },
   'library:export': () => store.exportAll(),
   'library:import': ({ data }) => store.importAll(data),
   'library:stats': async () => store.computeStats(await store.statsItems(), (await store.getSettings()).feePercent),

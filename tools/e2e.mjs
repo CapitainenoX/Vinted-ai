@@ -49,6 +49,7 @@ await ctx.route('https://www.vinted.fr/**', (route) => {
   const u = new URL(route.request().url());
   if (u.pathname === '/items/new') return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
   if (/^\/items\/\d+[^/]*\/edit/.test(u.pathname)) return route.fulfill({ contentType: 'text/html', body: fixture('form.html') });
+  if (u.pathname.startsWith('/api/v2/item_upload/items')) return route.fulfill({ json: { item: { id: Number(u.searchParams.get('id')) } } });
   if (u.pathname.startsWith('/member/42')) return route.fulfill({ contentType: 'text/html', body: fixture('profile.html') });
   if (u.pathname.startsWith('/inbox/')) return route.fulfill({ contentType: 'text/html', body: fixture('inbox.html') });
   if (u.pathname.startsWith('/items/888')) return route.fulfill({ contentType: 'text/html', body: '<meta charset="utf-8"><h1>Veste Zara en jean bleue L</h1><p>18,50 €</p>' });
@@ -296,6 +297,22 @@ const saved = await sw.evaluate(async () => (await chrome.storage.local.get('lib
 check(saved?.price === 18.5 && saved.description.includes('portée 3 fois') && saved.status === 'listed', 'saved item has the form fields (title, description, price 18.5)');
 check(saved?.vintedId === '888' && saved.vintedUrl.endsWith('/items/888'), 'saved item linked to the new Vinted listing (#888)');
 await sell.screenshot({ path: `${shots}/8-saved-toast.png` });
+// Same tab, a second and third listing: each publish is a NEW item with the next number (never the previous one),
+// linked at once from Vinted's API response (no need to open the listing).
+const skus = [];
+for (const [apiId, title] of [['1001', 'Robe Mango noire M'], ['1002', 'Pull Zara beige S']]) {
+  await sell.goto(`https://www.vinted.fr/items/new?api=${apiId}`);
+  await sell.locator('#vinted-ai-root .panel.open').waitFor({ timeout: 8000 });
+  await sell.fill('#title', title);
+  await sell.fill('#price', '12');
+  await sell.click('#publish');
+  await sell.locator('#vinted-ai-root .toast', { hasText: 'Annonce liée' }).waitFor({ timeout: 8000 });
+  const it = await sw.evaluate(async (t) => (await chrome.storage.local.get('library')).library.find((i) => i.title === t), title);
+  skus.push([it?.sku, it?.vintedId]);
+}
+const zara = await sw.evaluate(async () => (await chrome.storage.local.get('library')).library.find((i) => i.title === 'Veste Zara en jean bleue L'));
+check(skus[0][0] && skus[1][0] && skus[0][0] !== skus[1][0] && skus[0][0] !== zara.sku, `each publish = a new item with its own number (${zara.sku}, ${skus[0][0]}, ${skus[1][0]})`);
+check(skus[0][1] === '1001' && skus[1][1] === '1002' && zara.vintedId === '888', 'each item linked to ITS listing right after publishing (API), no page visit needed');
 
 // 6. My profile: listings on sale → mark one as sold
 const prof = await ctx.newPage();

@@ -447,7 +447,8 @@
     view.innerHTML = '<div class="pad"><span class="spinner"></span></div>';
     ownership = await VAI.detectOwnership();
     const own = ownership.own;
-    const linked = ownership.linked || (id ? await send('library:get', { ref: id }).catch(() => null) : null);
+    let linked = ownership.linked || (id ? (await send('library:index').catch(() => ({})))[id] && (await send('library:get', { ref: id }).catch(() => null)) : null);
+    if (!linked && own) linked = await autolinkByTitle(id, info.title);
     const nextNumber = linked ? null : await send('library:nextNumber').catch(() => null);
     const priceNum = parseFloat(String(info.price).replace(/[^\d,.]/g, '').replace(',', '.'));
 
@@ -672,7 +673,10 @@
       return;
     }
     const cards = VAI.readProfileItems();
-    const index = await send('library:index').catch(() => ({}));
+    let index = await send('library:index').catch(() => ({}));
+    let linkedAny = false;
+    for (const c of cards.filter((c) => !index[c.id] && !c.sold)) linkedAny = !!(await autolinkByTitle(c.id, c.title)) || linkedAny;
+    if (linkedAny) index = await send('library:index').catch(() => index);
     const onSale = cards.filter((c) => !c.sold && index[c.id]?.status !== 'sold');
     view.innerHTML = `<div class="pad stack">
       <div class="card row-between"><div><strong>Mes articles en vente</strong><div class="small muted">${onSale.length} sur cette page${cards.length > onSale.length ? ` · ${cards.length - onSale.length} vendu(s)` : ''}</div></div>
@@ -820,9 +824,12 @@
   const SAVE_BTN = /^(ajouter|publier|mettre en vente|enregistrer|sauvegarder|valider|upload|add|publish|save|list( item)?|hinzufügen|speichern|subir|guardar|pubblica|carica|salva)\b/i;
   const NOT_SAVE = /photo|image|vid[eé]o|marque|brand|taille|size|couleur|colou?r|mati[eè]re|cat[ée]gorie|favori|panier|lot|filtre|recherch|search/i;
   const DRAFT_BTN = /brouillon|draft|entwurf|borrador|bozza/i;
-  // sessionStorage survives Vinted's redirect to the new listing (same tab, same origin).
-  // Every save on the same form updates the same library item; the link to the new listing is made within 2 min.
+  // One library item per visit of the form: saving twice on the same form (validation error, draft then
+  // publish) updates it; a new "Vendre" page is a new visit → a new item with the next free number.
+  // sessionStorage keeps the state across Vinted's redirect after publishing (same tab, same origin).
   const CAPTURE_KEY = 'vai-captured';
+  const newVisit = () => Math.random().toString(36).slice(2);
+  let formVisit = newVisit();
   const readCaptured = () => {
     try {
       return JSON.parse(sessionStorage.getItem(CAPTURE_KEY) || 'null');
@@ -832,32 +839,47 @@
   };
   const writeCaptured = (c) => {
     try {
-      sessionStorage.setItem(CAPTURE_KEY, JSON.stringify(c));
+      c ? sessionStorage.setItem(CAPTURE_KEY, JSON.stringify(c)) : sessionStorage.removeItem(CAPTURE_KEY);
     } catch {}
   };
-  let lastCapture = 0;
+  let capturing = null; // in-flight capture (click + API hook can both fire)
 
-  async function captureForm(draft) {
-    if (VAI.pageType() !== 'form' || Date.now() - lastCapture < 1500) return;
-    const form = VAI.readFormData(); // read now, before Vinted resets or leaves the form
-    if (!form.title) return; // nothing worth saving (or fields not found)
-    lastCapture = Date.now();
-    const settings = await send('settings:get').catch(() => null);
-    if (settings && settings.autoSaveOnPublish === false) return;
-    const editId = VAI.currentItemId();
+  function captureForm(draft) {
+    if (VAI.pageType() !== 'form') return Promise.resolve(null);
     const prev = readCaptured();
-    const data = {
-      ...form,
-      status: draft ? 'draft' : 'listed',
-      ...(editId ? { vintedId: editId, vintedUrl: `${location.origin}/items/${editId}` } : {}),
-    };
-    const itemId = (prev?.path === location.pathname && prev.itemId) || pendingItem?.id || null;
-    const { item, created } = await send('library:captureForm', { data, itemId });
-    writeCaptured({ itemId: item.id, at: Date.now(), path: location.pathname, linked: !!editId || draft });
-    toast(`${icon('check', 14)} ${created ? 'Ajouté' : 'Mis à jour'} dans ta bibliothèque <span class="sku">${esc(item.sku)}</span>${created ? ' — note ce numéro sur le sachet.' : ''}`);
-    // Photos last: the page may already be navigating away.
-    const photos = await VAI.getPhotos(4, 320).catch(() => []);
-    if (photos.length) send('library:update', { ref: item.id, patch: { photos } }).catch(() => {});
+    if (capturing) return capturing;
+    if (prev?.visit === formVisit && Date.now() - prev.at < 1500) return Promise.resolve(prev);
+    const form = VAI.readFormData(); // read now, before Vinted resets or leaves the form
+    if (!form.title) return Promise.resolve(null); // nothing worth saving (or fields not found)
+    capturing = (async () => {
+      const settings = await send('settings:get').catch(() => null);
+      if (settings && settings.autoSaveOnPublish === false) return null;
+      const editId = VAI.currentItemId();
+      const data = {
+        ...form,
+        status: draft ? 'draft' : 'listed',
+        ...(editId ? { vintedId: editId, vintedUrl: `${location.origin}/items/${editId}` } : {}),
+      };
+      const itemId = (prev?.visit === formVisit && prev.itemId) || pendingItem?.id || null;
+      const { item, created } = await send('library:captureForm', { data, itemId });
+      const c = { itemId: item.id, visit: formVisit, at: Date.now(), linked: !!editId, draft: !!draft, awaitingRedirect: !editId && !draft };
+      writeCaptured(c);
+      toast(`${icon('check', 14)} ${created ? 'Ajouté' : 'Mis à jour'} dans ta bibliothèque <span class="sku">${esc(item.sku)}</span>${created ? ' — note ce numéro sur le sachet.' : ''}`);
+      // Photos last: the page may already be navigating away.
+      VAI.getPhotos(4, 320).then((photos) => photos.length && send('library:update', { ref: item.id, patch: { photos } })).catch(() => {});
+      return c;
+    })().finally(() => setTimeout(() => (capturing = null), 0));
+    return capturing;
+  }
+
+  async function linkListing(c, vintedId) {
+    if (!c || c.linked || !vintedId) return;
+    writeCaptured({ ...c, linked: true, awaitingRedirect: false });
+    const item = await send('library:link', { ref: c.itemId, vintedId, url: `${location.origin}/items/${vintedId}` }).catch(() => null);
+    if (item) {
+      toast(`${icon('link', 14)} Annonce liée à <span class="sku">${esc(item.sku)}</span>`);
+      VAI.refreshIndex?.();
+    }
   }
 
   // Capture phase: runs before Vinted's own handler clears or leaves the form.
@@ -876,17 +898,33 @@
     true,
   );
 
-  // After "Ajouter", Vinted opens the new listing: attach its id to the saved item.
+  // Vinted's save API answered (read by content/page-hook.js in the page's world): link right away.
+  window.addEventListener('message', async (e) => {
+    if (e.source !== window || e.data?.source !== 'vai-hook' || e.data.type !== 'item-saved') return;
+    const { id, draft } = e.data;
+    let c = readCaptured();
+    if (!c || c.visit !== formVisit) c = await captureForm(draft).catch(() => null); // button not recognised: capture now
+    if (c && !draft) await linkListing(c, id);
+  });
+
+  // Fallback when the API hook saw nothing: the first page after publishing is the new listing.
   async function linkCapturedListing() {
     const c = readCaptured();
+    if (!c?.awaitingRedirect) return;
+    writeCaptured({ ...c, awaitingRedirect: false }); // only the very first page counts
     const id = VAI.currentItemId();
-    if (!c || c.linked || Date.now() - c.at > 120000 || VAI.pageType() !== 'item' || !id) return;
-    writeCaptured({ ...c, linked: true });
-    const item = await send('library:update', { ref: c.itemId, patch: { vintedId: id, vintedUrl: `${location.origin}/items/${id}`, status: 'listed' } }).catch(() => null);
+    if (VAI.pageType() === 'item' && id && Date.now() - c.at < 60000) await linkListing(c, id);
+  }
+
+  // Last resort: my listing page / profile card with the exact title of an unlinked library item.
+  async function autolinkByTitle(vintedId, title) {
+    if (!vintedId || !title) return null;
+    const item = await send('library:autolink', { vintedId, title, url: `${location.origin}/items/${vintedId}` }).catch(() => null);
     if (item) {
-      toast(`${icon('link', 14)} Annonce liée à <span class="sku">${esc(item.sku)}</span>`);
+      toast(`${icon('link', 14)} Annonce liée à <span class="sku">${esc(item.sku)}</span> (même titre)`);
       VAI.refreshIndex?.();
     }
+    return item;
   }
 
   // ---------- page-aware boot ----------
@@ -915,6 +953,8 @@
   setInterval(() => {
     if (location.href === lastUrl) return;
     lastUrl = location.href;
+    formVisit = newVisit(); // a new page = a new form visit (never reuse the previous item)
+    pendingItem = null;
     lastResult = null;
     extraPhotos = [];
     ownership = null;

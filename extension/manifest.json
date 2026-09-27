@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Vinted AI",
   "short_name": "Vinted AI",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Agent IA pour vendeurs Vinted : annonces générées depuis les photos, analyse de prix, bibliothèque avec numéros d'article, dashboard.",
   "icons": {
     "16": "icons/icon16.png",
@@ -88,6 +88,38 @@
     "http://127.0.0.1/*"
   ],
   "content_scripts": [
+    {
+      "matches": [
+        "https://www.vinted.fr/*",
+        "https://www.vinted.be/*",
+        "https://www.vinted.es/*",
+        "https://www.vinted.it/*",
+        "https://www.vinted.de/*",
+        "https://www.vinted.nl/*",
+        "https://www.vinted.pl/*",
+        "https://www.vinted.pt/*",
+        "https://www.vinted.lu/*",
+        "https://www.vinted.at/*",
+        "https://www.vinted.co.uk/*",
+        "https://www.vinted.com/*",
+        "https://www.vinted.cz/*",
+        "https://www.vinted.lt/*",
+        "https://www.vinted.se/*",
+        "https://www.vinted.fi/*",
+        "https://www.vinted.dk/*",
+        "https://www.vinted.ie/*",
+        "https://www.vinted.sk/*",
+        "https://www.vinted.hu/*",
+        "https://www.vinted.ro/*",
+        "https://www.vinted.gr/*",
+        "https://www.vinted.hr/*"
+      ],
+      "js": [
+        "content/page-hook.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://www.vinted.fr/*",
